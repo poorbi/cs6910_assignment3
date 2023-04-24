@@ -12,11 +12,12 @@ import numpy as np
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-MAX_LENGTH = 24
-TAR_MAX_LENGTH = 20
+MAX_LENGTH = 28
+TAR_MAX_LENGTH = 28
 SOS_token = 0
 EOS_token = 1
 lang2_ = 'hin'
+drop = 0.2
 
 class Lang:
     def __init__(self, name):
@@ -42,8 +43,6 @@ class Lang:
 def prepareData(dir, lang1, lang2):
 
     data = pd.read_csv(dir,sep=",",names=['input', 'target'])
-    # validation = pd.read_csv(validation_path,sep=",",names=['input', 'target'])
-    # test = pd.read_csv(test_path,sep=",",names=['input', 'target'])
 
     input_lang = Lang(lang1)
     output_lang = Lang(lang2)
@@ -68,6 +67,7 @@ validation_path = os.path.join(dir, lang2_, lang2_ + '_valid.csv')
 test_path = os.path.join(dir, lang2_, lang2_ + '_test.csv')
 
 input_lang, output_lang, pairs = prepareData(train_path,'eng', 'hin')
+val_input_lang, val_output_lang, val_pairs = prepareData(validation_path,'eng', 'hin')
 print(random.choice(pairs))
 
 class EncoderRNN(nn.Module):
@@ -76,16 +76,17 @@ class EncoderRNN(nn.Module):
         self.hidden_size = hidden_size
 
         self.embedding = nn.Embedding(input_size, hidden_size)
-        self.gru = nn.GRU(hidden_size, hidden_size)
+        self.dropout = nn.Dropout(drop)
+        self.gru = nn.GRU(hidden_size, hidden_size,num_layers = 2)
 
     def forward(self, input, hidden):
-        embedded = self.embedding(input).view(1, 1, -1)
+        embedded = self.dropout(self.embedding(input).view(1, 1, -1))
         output = embedded
         output, hidden = self.gru(output, hidden)
         return output, hidden
 
     def initHidden(self):
-        return torch.zeros(1, 1, self.hidden_size, device=device)
+        return torch.zeros(2, 1, self.hidden_size, device=device)
 
 class DecoderRNN(nn.Module):
     def __init__(self, hidden_size, output_size):
@@ -93,19 +94,59 @@ class DecoderRNN(nn.Module):
         self.hidden_size = hidden_size
 
         self.embedding = nn.Embedding(output_size, hidden_size)
-        self.gru = nn.GRU(hidden_size, hidden_size)
+        self.gru = nn.GRU(hidden_size, hidden_size, num_layers = 2)
+        self.dropout = nn.Dropout(drop)
         self.out = nn.Linear(hidden_size, output_size)
         self.softmax = nn.LogSoftmax(dim=1)
 
     def forward(self, input, hidden):
-        output = self.embedding(input).view(1, 1, -1)
+        output = self.dropout(self.embedding(input).view(1, 1, -1))
         output = F.relu(output)
         output, hidden = self.gru(output, hidden)
         output = self.softmax(self.out(output[0]))
         return output, hidden
 
     def initHidden(self):
-        return torch.zeros(1, 1, self.hidden_size, device=device)
+        return torch.zeros(2, 1, self.hidden_size, device=device)
+
+def evaluate(encoder, decoder, word, target, criterion, max_length=TAR_MAX_LENGTH):
+    with torch.no_grad():
+        input_tensor = tensorFromWord(input_lang, word)
+        target_tensor = tensorFromWord(output_lang, target)
+        input_length = input_tensor.size()[0]
+        target_length = target_tensor.size()[0]
+        encoder_hidden = encoder.initHidden()
+
+        encoder_outputs = torch.zeros(max_length, encoder.hidden_size, device=device)
+
+        for ei in range(input_length):
+            encoder_output, encoder_hidden = encoder(input_tensor[ei],
+                                                     encoder_hidden)
+            encoder_outputs[ei] += encoder_output[0, 0]
+
+        decoder_input = torch.tensor([[SOS_token]], device=device)
+
+        decoder_hidden = encoder_hidden
+
+        decoded_words = []
+        loss = 0
+
+        for di in range(max_length):
+            decoder_output, decoder_hidden = decoder(
+                decoder_input, decoder_hidden)
+            topv, topi = decoder_output.data.topk(1)
+            if topi.item() == EOS_token:
+                decoded_words.append('<EOS>')
+                break
+            else:
+                decoded_words.append(output_lang.index2char[topi.item()])
+            if(di < target_length) : 
+                loss += criterion(decoder_output, target_tensor[di])
+            decoder_input = topi.squeeze().detach()
+
+        str_word = ''
+
+        return loss.item()/target_length, str_word.join(decoded_words), decoded_words
 
 def indexesFromWord(lang, word):
     return [lang.char2index[char] for char in word]
@@ -182,10 +223,12 @@ def trainIters(encoder, decoder, n_iters, learning_rate=0.01):
         training_pairs.append(tensorsFromPair(pairs[i]))
     criterion = nn.CrossEntropyLoss()
     plot_losses = []
+    val_plot_losses = []
     
-    ep = 20
+    ep = 5
     for i in range(ep):
         print(i)
+        val_loss = 0
         plot_loss_total = 0
         for iter in range(1, n_iters + 1):
             training_pair = training_pairs[iter - 1]
@@ -196,11 +239,24 @@ def trainIters(encoder, decoder, n_iters, learning_rate=0.01):
                         decoder, encoder_optimizer, decoder_optimizer, criterion)
             
             plot_loss_total += loss
-        print(plot_loss_total/n_iters)
+         
+        count = 0 
+        for val_pair in val_pairs:
+            v_loss, out_str, dec_words = evaluate(encoder,decoder,val_pair[0],val_pair[1],criterion)
+            # print(count , " : ", val_pair[0]," ",val_pair[1]," ", out_str)
+            val_loss += v_loss 
+            count+=1
+    
+        val_loss = val_loss/len(val_pairs)
+
+        print('train loss :',plot_loss_total/n_iters)
+        print('validation loss : ',val_loss)
         plot_losses.append(plot_loss_total/n_iters)
+        val_plot_losses.append(val_loss)
 
     print('before plot')
-    showPlot(plot_losses)
+    # showPlot(plot_losses)
+    showPlot(val_plot_losses)
     print('after loss')
 
 def showPlot(points):
