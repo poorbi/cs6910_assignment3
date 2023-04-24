@@ -77,7 +77,7 @@ class EncoderRNN(nn.Module):
 
         self.embedding = nn.Embedding(input_size, hidden_size)
         self.dropout = nn.Dropout(drop)
-        self.gru = nn.GRU(hidden_size, hidden_size,num_layers = 2)
+        self.gru = nn.GRU(hidden_size, hidden_size,num_layers = 1)
 
     def forward(self, input, hidden):
         embedded = self.dropout(self.embedding(input).view(1, 1, -1))
@@ -86,7 +86,7 @@ class EncoderRNN(nn.Module):
         return output, hidden
 
     def initHidden(self):
-        return torch.zeros(2, 1, self.hidden_size, device=device)
+        return torch.zeros(1, 1, self.hidden_size, device=device)
 
 class DecoderRNN(nn.Module):
     def __init__(self, hidden_size, output_size):
@@ -94,7 +94,7 @@ class DecoderRNN(nn.Module):
         self.hidden_size = hidden_size
 
         self.embedding = nn.Embedding(output_size, hidden_size)
-        self.gru = nn.GRU(hidden_size, hidden_size, num_layers = 2)
+        self.gru = nn.GRU(hidden_size, hidden_size, num_layers = 1)
         self.dropout = nn.Dropout(drop)
         self.out = nn.Linear(hidden_size, output_size)
         self.softmax = nn.LogSoftmax(dim=1)
@@ -107,7 +107,7 @@ class DecoderRNN(nn.Module):
         return output, hidden
 
     def initHidden(self):
-        return torch.zeros(2, 1, self.hidden_size, device=device)
+        return torch.zeros(1, 1, self.hidden_size, device=device)
 
 def evaluate(encoder, decoder, word, target, criterion, max_length=TAR_MAX_LENGTH):
     with torch.no_grad():
@@ -128,25 +128,27 @@ def evaluate(encoder, decoder, word, target, criterion, max_length=TAR_MAX_LENGT
 
         decoder_hidden = encoder_hidden
 
-        decoded_words = []
+        decoded_chars = []
         loss = 0
+        str_word = ''
 
         for di in range(max_length):
             decoder_output, decoder_hidden = decoder(
                 decoder_input, decoder_hidden)
             topv, topi = decoder_output.data.topk(1)
             if topi.item() == EOS_token:
-                decoded_words.append('<EOS>')
+                str_word = str_word.join(decoded_chars)
+                decoded_chars.append('<EOS>')
                 break
             else:
-                decoded_words.append(output_lang.index2char[topi.item()])
+                decoded_chars.append(output_lang.index2char[topi.item()])
             if(di < target_length) : 
                 loss += criterion(decoder_output, target_tensor[di])
             decoder_input = topi.squeeze().detach()
 
-        str_word = ''
+        
 
-        return loss.item()/target_length, str_word.join(decoded_words), decoded_words
+        return loss.item()/target_length, str_word
 
 def indexesFromWord(lang, word):
     return [lang.char2index[char] for char in word]
@@ -231,26 +233,54 @@ def trainIters(encoder, decoder, n_iters, learning_rate=0.01):
         val_loss = 0
         plot_loss_total = 0
         for iter in range(1, n_iters + 1):
+            pair_ = pairs[iter - 1]
             training_pair = training_pairs[iter - 1]
             input_tensor = training_pair[0]
             target_tensor = training_pair[1]
 
             loss = train(input_tensor, target_tensor, encoder,
                         decoder, encoder_optimizer, decoder_optimizer, criterion)
-            
             plot_loss_total += loss
+        
+        count = 0 
+        train_acc = 0
+        char_train_acc = 0
+        for pair_ in pairs:
+            _ , out_str_ = evaluate(encoder,decoder,pair_[0],pair_[1],criterion)
+            print(count , " : ", pair_[0]," ",pair_[1]," ", out_str_)
+            if(out_str_ == pair_[1]):
+                train_acc+=1
+            for i in range(len(out_str_)):
+                char_acc = 0
+                if(out_str_[i] == pair_[1][i]):
+                     char_acc+= 1
+                char_acc /= (len(out_str_))
+                char_train_acc += char_acc 
+            count+=1
          
+        val_acc = 0
+        char_val_acc = 0
         count = 0 
         for val_pair in val_pairs:
-            v_loss, out_str, dec_words = evaluate(encoder,decoder,val_pair[0],val_pair[1],criterion)
-            # print(count , " : ", val_pair[0]," ",val_pair[1]," ", out_str)
+            v_loss, out_str = evaluate(encoder,decoder,val_pair[0],val_pair[1],criterion)
+            if(out_str == val_pair[1]):
+                val_acc+=1
+            for i in range(len(out_str)):
+                char_acc = 0
+                if(out_str[i] == val_pair[1][i]):
+                     char_acc+= 1
+                char_acc /= (len(out_str))
+                char_val_acc += char_acc
             val_loss += v_loss 
             count+=1
     
         val_loss = val_loss/len(val_pairs)
 
         print('train loss :',plot_loss_total/n_iters)
+        print("train accuracy : ", train_acc/len(pairs))
+        print("char wise train accuracy : ", char_train_acc/len(pairs))
         print('validation loss : ',val_loss)
+        print("char wise validation accuracy : ", char_val_acc/len(val_pairs))
         plot_losses.append(plot_loss_total/n_iters)
         val_plot_losses.append(val_loss)
 
