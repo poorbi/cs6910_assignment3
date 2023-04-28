@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import os
 import torch
@@ -7,6 +8,8 @@ import random
 from torch.autograd import Variable
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import numpy as np
+import torch.utils.data as Data
 
 use_cuda = torch.cuda.is_available()
 
@@ -14,17 +17,16 @@ SOS_token = 0
 EOS_token = 1
 UNK_token = 3
 PAD_token = 4
-lang2_ = 'hin'
-drop = 0.2
 
 class Lang:
-
+    
     def __init__(self, name):
-        self.name = name
-        self.char2index = {}
+        
         self.char2count = {}
-        self.index2char = {0: '<', 1: '>',2 : '?', 3:'.'}
+        self.char2index = {}
         self.n_chars = 4
+        self.index2char = {0: '<', 1: '>',2 : '?', 3:'.'}
+        self.name = name
 
     def addWord(self, word):
         for char in word:
@@ -33,8 +35,8 @@ class Lang:
     def addChar(self, char):
         if char not in self.char2index:
             self.char2index[char] = self.n_chars
-            self.char2count[char] = 1
             self.index2char[self.n_chars] = char
+            self.char2count[char] = 1
             self.n_chars += 1
         else:
             self.char2count[char] += 1
@@ -42,9 +44,7 @@ class Lang:
 def prepareData(dir, lang1, lang2):
 
     data = pd.read_csv(dir,sep=",",names=['input', 'target'])
-
     max_input_length = max([len(txt) for txt in data['input'].to_list()])
-
     max_target_length = max([len(txt) for txt in data['target'].to_list()])
 
     input_lang = Lang(lang1)
@@ -58,11 +58,20 @@ def prepareData(dir, lang1, lang2):
     for pair in pairs:
         input_lang.addWord(pair[0])
         output_lang.addWord(pair[1])
-    
+
     print("Counted letters:")
     print(input_lang.name, max_input_length)
     print(output_lang.name, max_target_length)
-    return input_lang, output_lang, pairs, max_input_length, max_target_length
+
+    prepared_data = {
+        'input_lang' : input_lang,
+        'output_lang' : output_lang,
+        'pairs' : pairs,
+        'max_input_length' : max_input_length,
+        'max_target_length' : max_target_length
+    }
+
+    return prepared_data
 
 class EncoderRNN(nn.Module):
     def __init__(self, input_size, configuration):
@@ -77,8 +86,6 @@ class EncoderRNN(nn.Module):
         self.batch_size = configuration['batch_size']
 
         self.embedding = nn.Embedding(input_size, self.embedding_size)
-        # self.embedding.weight.data.copy_(torch.eye(self.embedding_size))
-        # self.embedding.weight.requires_grad = False
         self.dropout = nn.Dropout(self.drop_out)
         self.cell_layer = None
         if self.cell_type == 'RNN':
@@ -116,8 +123,6 @@ class DecoderRNN(nn.Module):
         
 
         self.embedding = nn.Embedding(output_size, self.embedding_size)
-        # self.embedding.weight.data.copy_(torch.eye(self.embedding_size))
-        # self.embedding.weight.requires_grad = False
 
         self.cell_layer = None
         if self.cell_type == 'RNN':
@@ -146,23 +151,8 @@ class DecoderRNN(nn.Module):
         else :
             return res
 
-dir = 'aksharantar_sampled'
-train_path = os.path.join(dir, lang2_, lang2_ + '_train.csv')
-validation_path = os.path.join(dir, lang2_, lang2_ + '_valid.csv')
-test_path = os.path.join(dir, lang2_, lang2_ + '_test.csv')
-
-input_lang, output_lang, pairs, max_input_length, max_target_length = prepareData(train_path,'eng', 'hin')
-max_len = max(max_input_length, max_target_length) + 2
-val_input_lang, val_output_lang, val_pairs, max_input_length_val, max_target_length_val = prepareData(validation_path,'eng', 'hin')
-test_input_lang, test_output_lang, test_pairs, max_input_length_test, max_target_length_test = prepareData(test_path,'eng', 'hin')
-max_list = [max_input_length, max_target_length, max_input_length_val, max_target_length_val, max_input_length_test, max_target_length_test]
-max_len_all = max(max_list)
-
-print(random.choice(pairs))
-
 def indexesFromWord(lang, word):
     return [lang.char2index[char] for char in word]
-
 
 def variableFromSentence(lang, word, max_length):
     indexes = indexesFromWord(lang, word)
@@ -182,9 +172,8 @@ def variablesFromPairs(input_lang, output_lang, pairs, max_length):
         res.append((input_variable, target_variable))
     return res
 
-teacher_forcing_ratio = 0.5
-
-def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, configuration, max_length = max_len_all):
+def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, configuration, max_length, teacher_forcing_ratio = 0.5):
+    
     batch_size = configuration['batch_size']
     encoder_hidden = encoder.initHidden()
 
@@ -242,7 +231,7 @@ def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, deco
 
     return loss.item() / target_length
 
-def evaluate(encoder, decoder, loader, configuration, criterion , max_length = max_len ):
+def evaluate(encoder, decoder, loader, configuration, criterion , max_length):
 
     batch_size = configuration['batch_size']
     total = 0
@@ -285,8 +274,8 @@ def evaluate(encoder, decoder, loader, configuration, criterion , max_length = m
         output = output.transpose(0,1)
         for di in range(output.size()[0]):
             ignore = [SOS_token, EOS_token, PAD_token]
-            sent = [output_lang.index2char[letter.item()] for letter in output[di] if letter not in ignore]
-            y = [output_lang.index2char[letter.item()] for letter in batch_y[di] if letter not in ignore]
+            sent = [configuration['output_lang'].index2char[letter.item()] for letter in output[di] if letter not in ignore]
+            y = [configuration['output_lang'].index2char[letter.item()] for letter in batch_y[di] if letter not in ignore]
             # print(sent,' ',y)
             if sent == y:
                 correct += 1
@@ -295,7 +284,7 @@ def evaluate(encoder, decoder, loader, configuration, criterion , max_length = m
 
 def trainIters(encoder, decoder, train_loader, val_loader, learning_rate, configuration):
 
-    print(len(train_loader))
+    max_length = configuration['max_length_word']
 
     train_plot_losses = []
 
@@ -304,27 +293,26 @@ def trainIters(encoder, decoder, train_loader, val_loader, learning_rate, config
 
     criterion = nn.NLLLoss()
     
-    ep = 20
+    ep = 10
 
     for i in range(ep):
-        print('ep : ',i)
         plot_loss_total = 0
-        print('training..')
         batch_no = 1
         for batchx, batchy in train_loader:
             loss = None
 
             if configuration['attention'] == False:
-                loss = train(batchx, batchy, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, configuration)
-                # print('batch_no : ',batch_no, ':', loss)
+                loss = train(batchx, batchy, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, configuration, max_length)
             
             plot_loss_total += loss
             batch_no+=1
-        print('train loss :', plot_loss_total/len(train_loader))
+
+        print('ep : ', i, ' | ', end='')
+        print('train loss :', plot_loss_total/len(train_loader), ' | ', end='')
 
         train_plot_losses.append(plot_loss_total/len(train_loader))
-        print("train_acc : " ,evaluate(encoder, decoder, train_loader, configuration, criterion))
-        print("val_acc : " ,evaluate(encoder, decoder, val_loader, configuration, criterion))
+        print("train_acc : " ,evaluate(encoder, decoder, train_loader, configuration, criterion, max_length), ' | ', end='')
+        print("val_acc : " ,evaluate(encoder, decoder, val_loader, configuration, criterion, max_length))
 
     showPlot(train_plot_losses)
 
@@ -333,33 +321,71 @@ def showPlot(points):
     plt.plot(points)
     plt.show()
 
-configuration = {
-        "hidden_size" : 256,
-        "input_lang" : 'eng',
-        "target_lang" : 'hin',
-        "cell_type"   : 'LSTM',
-        "num_layers_encoder" : 2 ,
-        "num_layers_decoder" : 2,
-        "drop_out"    : 0.2, 
-        "embedding_size" : 256,
-        "bi_directional" : False,
-        "batch_size" : 32,
-        "attention" : False ,
-        "max_length_word" : max_len_all
-    }
+def main():
 
-learning_rate = 0.001
+    configuration = {
+            "hidden_size" : 256,
+            "source_lang" : 'eng',
+            "target_lang" : 'tel',
+            "cell_type"   : 'LSTM',
+            "num_layers_encoder" : 3,
+            "num_layers_decoder" : 3,
+            "drop_out"    : 0.2, 
+            "embedding_size" : 256,
+            "bi_directional" : False,
+            "batch_size" : 32,
+            "attention" : False ,
+        }
+    
+    dir = 'aksharantar_sampled'
+    train_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_train.csv')
+    validation_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_valid.csv')
+    test_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_test.csv')
 
-encoder1 = EncoderRNN(input_lang.n_chars, configuration)
-decoder1 = DecoderRNN(configuration, output_lang.n_chars)
-if use_cuda:
-    encoder1=encoder1.cuda()
-    decoder1=decoder1.cuda()
+    train_prepared_data= prepareData(train_path,configuration['source_lang'], configuration['target_lang'])
 
-pairs = variablesFromPairs(input_lang, output_lang, pairs, max_len)
-val_pairs = variablesFromPairs(input_lang, output_lang, val_pairs, max_len)
-train_loader = torch.utils.data.DataLoader(pairs, batch_size=configuration['batch_size'], shuffle=True)
-val_loader = torch.utils.data.DataLoader(val_pairs, batch_size=configuration['batch_size'], shuffle=True)
+    input_lang = train_prepared_data['input_lang']
+    output_lang = train_prepared_data['output_lang']
+    pairs = train_prepared_data['pairs']
+    max_input_length = train_prepared_data['max_input_length']
+    max_target_length = train_prepared_data['max_target_length']
+    
+    val_prepared_data= prepareData(validation_path,configuration['source_lang'], configuration['target_lang'])
 
-if configuration['attention'] == False :
-    trainIters(encoder1, decoder1, train_loader, val_loader, learning_rate, configuration)
+    val_pairs = val_prepared_data['pairs']
+    max_input_length_val = val_prepared_data['max_input_length']
+    max_target_length_val = val_prepared_data['max_target_length']
+
+    test_prepared_data= prepareData(validation_path, configuration['source_lang'], configuration['target_lang'])
+
+    test_pairs = test_prepared_data['pairs']
+    max_input_length_test = test_prepared_data['max_input_length']
+    max_target_length_test = test_prepared_data['max_target_length']
+
+    max_list = [max_input_length, max_target_length, max_input_length_val, max_target_length_val, max_input_length_test, max_target_length_test]
+    max_len_all = max(max_list)
+
+    max_len = max(max_input_length, max_target_length) + 2
+
+    configuration['input_lang'] = input_lang
+    configuration['output_lang'] = output_lang
+    configuration['max_length_word'] = max_len_all + 1
+
+    learning_rate = 0.001
+
+    encoder1 = EncoderRNN(input_lang.n_chars, configuration)
+    decoder1 = DecoderRNN(configuration, output_lang.n_chars)
+    if use_cuda:
+        encoder1=encoder1.cuda()
+        decoder1=decoder1.cuda()
+
+    pairs = variablesFromPairs(configuration['input_lang'], configuration['output_lang'], pairs , configuration['max_length_word'])
+    val_pairs = variablesFromPairs(configuration['input_lang'], configuration['output_lang'], val_pairs, configuration['max_length_word'])
+
+    train_loader = torch.utils.data.DataLoader(pairs, batch_size=configuration['batch_size'], shuffle=True)
+    val_loader = torch.utils.data.DataLoader(val_pairs, batch_size=configuration['batch_size'], shuffle=True)
+
+    if configuration['attention'] == False :
+        trainIters(encoder1, decoder1, train_loader, val_loader, learning_rate, configuration)
+
+main()
