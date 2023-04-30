@@ -1,17 +1,17 @@
-import numpy as np
-import pandas as pd
 import os
+import wandb
 import torch
+import random
+import argparse
+import pandas as pd
 import torch.nn as nn
 import torch.optim as optim
-import random
-from torch.autograd import Variable
-import torch.nn.functional as F
-import matplotlib.pyplot as plt
-import numpy as np
-import torch.utils.data as Data
 from datetime import datetime
+import matplotlib.pyplot as plt
+import torch.nn.functional as F
+from torch.autograd import Variable
 
+dir = 'aksharantar_sampled'
 use_cuda = torch.cuda.is_available()
 
 SOS_token = 0
@@ -19,10 +19,9 @@ EOS_token = 1
 UNK_token = 3
 PAD_token = 4
 
-class Lang:
-    
+class Vocabulary:
+
     def __init__(self, name):
-        
         self.char2count = {}
         self.char2index = {}
         self.n_chars = 4
@@ -31,16 +30,14 @@ class Lang:
 
     def addWord(self, word):
         for char in word:
-            self.addChar(char)
-
-    def addChar(self, char):
-        if char not in self.char2index:
-            self.char2index[char] = self.n_chars
-            self.index2char[self.n_chars] = char
-            self.char2count[char] = 1
-            self.n_chars += 1
-        else:
-            self.char2count[char] += 1
+            if char not in self.char2index:
+                self.char2index[char] = self.n_chars
+                self.index2char[self.n_chars] = char
+                self.char2count[char] = 1
+                self.n_chars += 1
+            else:
+                self.char2count[char] += 1
+        
 
 def prepareData(dir, lang1, lang2):
 
@@ -48,8 +45,8 @@ def prepareData(dir, lang1, lang2):
     max_input_length = max([len(txt) for txt in data['input'].to_list()])
     max_target_length = max([len(txt) for txt in data['target'].to_list()])
 
-    input_lang = Lang(lang1)
-    output_lang = Lang(lang2)
+    input_lang = Vocabulary(lang1)
+    output_lang = Vocabulary(lang2)
 
     pairs = []
     input_list,target_list = data['input'].to_list(),data['target'].to_list()
@@ -59,10 +56,6 @@ def prepareData(dir, lang1, lang2):
     for pair in pairs:
         input_lang.addWord(pair[0])
         output_lang.addWord(pair[1])
-
-    print("Counted letters:")
-    print(input_lang.name, max_input_length)
-    print(output_lang.name, max_target_length)
 
     prepared_data = {
         'input_lang' : input_lang,
@@ -89,11 +82,11 @@ class EncoderRNN(nn.Module):
         self.dropout = nn.Dropout(self.drop_out)
         self.cell_layer = None
         if self.cell_type == 'RNN':
-            self.cell_layer = nn.RNN(self.embedding_size, self.hidden_size, num_layers = self.num_layers_encoder, dropout = self.drop_out)
+            self.cell_layer = nn.RNN(self.embedding_size, self.hidden_size, num_layers = self.num_layers_encoder, dropout = self.drop_out, bidirectional = self.bi_directional)
         elif self.cell_type == 'GRU':
-            self.cell_layer = nn.GRU(self.embedding_size, self.hidden_size, num_layers = self.num_layers_encoder, dropout = self.drop_out)
+            self.cell_layer = nn.GRU(self.embedding_size, self.hidden_size, num_layers = self.num_layers_encoder, dropout = self.drop_out, bidirectional = self.bi_directional)
         elif self.cell_type == 'LSTM':
-            self.cell_layer = nn.LSTM(self.embedding_size, self.hidden_size, num_layers = self.num_layers_encoder, dropout = self.drop_out)
+            self.cell_layer = nn.LSTM(self.embedding_size, self.hidden_size, num_layers = self.num_layers_encoder, dropout = self.drop_out, bidirectional = self.bi_directional)
  
     def forward(self, input, batch_size, hidden):
         embedded = self.dropout(self.embedding(input).view(1,batch_size, -1))
@@ -102,7 +95,11 @@ class EncoderRNN(nn.Module):
         return output, hidden
 
     def initHidden(self ,batch_size):
-        res = torch.zeros(self.num_layers_encoder, batch_size, self.hidden_size)
+        res = None
+        if self.bi_directional:
+            res = torch.zeros(self.num_layers_encoder * 2, batch_size, self.hidden_size)
+        else:
+            res = torch.zeros(self.num_layers_encoder, batch_size, self.hidden_size)
         if use_cuda : 
             return res.cuda()
         else :
@@ -120,18 +117,21 @@ class DecoderRNN(nn.Module):
         self.bi_directional = configuration["bi_directional"]
         self.dropout = nn.Dropout(self.drop_out)
         
-
         self.embedding = nn.Embedding(output_size, self.embedding_size)
 
         self.cell_layer = None
         if self.cell_type == 'RNN':
-            self.cell_layer = nn.RNN(self.embedding_size, self.hidden_size, num_layers = self.num_layers_decoder, dropout = self.drop_out)
+            self.cell_layer = nn.RNN(self.embedding_size, self.hidden_size, num_layers = self.num_layers_decoder, dropout = self.drop_out, bidirectional = self.bi_directional)
         elif self.cell_type == 'GRU':
-            self.cell_layer =   nn.GRU(self.embedding_size, self.hidden_size, num_layers = self.num_layers_decoder, dropout = self.drop_out)
+            self.cell_layer =   nn.GRU(self.embedding_size, self.hidden_size, num_layers = self.num_layers_decoder, dropout = self.drop_out, bidirectional = self.bi_directional)
         elif self.cell_type == 'LSTM':
-            self.cell_layer = nn.LSTM(self.embedding_size, self.hidden_size, num_layers = self.num_layers_decoder, dropout = self.drop_out)
+            self.cell_layer = nn.LSTM(self.embedding_size, self.hidden_size, num_layers = self.num_layers_decoder, dropout = self.drop_out, bidirectional = self.bi_directional)
         
-        self.out = nn.Linear(self.hidden_size, output_size)
+        if self.bi_directional:
+            self.out = nn.Linear(self.hidden_size * 2 ,output_size)
+        else:
+            self.out = nn.Linear(self.hidden_size, output_size)
+        
         self.softmax = nn.LogSoftmax(dim=1)
 
     def forward(self, input, batch_size, hidden):
@@ -143,15 +143,21 @@ class DecoderRNN(nn.Module):
         output = self.softmax(self.out(output[0]))
         return output, hidden
 
-    def initHidden(self, batch_size):
-        res = torch.zeros(self.num_layers_decoder, batch_size, self.hidden_size)
-        if use_cuda : 
-            return res.cuda()
-        else :
-            return res
+    # def initHidden(self, batch_size):
+    #     res = torch.zeros(self.num_layers_decoder, batch_size, self.hidden_size)
+    #     if use_cuda : 
+    #         return res.cuda()
+    #     else :
+    #         return res
 
 def indexesFromWord(lang, word):
-    return [lang.char2index[char] for char in word]
+    index_list = []
+    for char in word:
+        if char in lang.char2index.keys():
+            index_list.append(lang.char2index[char])
+        else:
+            index_list.append(UNK_token)
+    return index_list
 
 def variableFromSentence(lang, word, max_length):
     indexes = indexesFromWord(lang, word)
@@ -196,7 +202,6 @@ def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, deco
 
     for ei in range(input_length):
         encoder_output, encoder_hidden = encoder(input_tensor[ei], batch_size, encoder_hidden)
-        encoder_outputs[ei] = encoder_output[0]
 
     decoder_input = Variable(torch.LongTensor([SOS_token]*batch_size))
     decoder_input = decoder_input.cuda() if use_cuda else decoder_input
@@ -220,7 +225,6 @@ def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, deco
             decoder_input = decoder_input.cuda() if use_cuda else decoder_input
 
             loss += criterion(decoder_output, target_tensor[di])
-            
 
     loss.backward()
 
@@ -231,74 +235,29 @@ def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, deco
   
 def cal_val_loss(encoder, decoder, input_tensor, target_tensor, configuration, criterion , max_length):
 
-    batch_size = configuration['batch_size']
+    with torch.no_grad():
 
-    encoder_hidden = encoder.initHidden(batch_size)
-
-    input_tensor = Variable(input_tensor.transpose(0, 1))
-    target_tensor = Variable(target_tensor.transpose(0, 1))
-        
-    if configuration["cell_type"] == "LSTM":
-        encoder_cell_state = encoder.initHidden(batch_size)
-        encoder_hidden = (encoder_hidden, encoder_cell_state)
-
-    input_length = input_tensor.size()[0]
-    target_length = target_tensor.size()[0]
-
-    encoder_outputs = Variable(torch.zeros(max_length, batch_size, encoder.hidden_size))
-    encoder_outputs = encoder_outputs.cuda() if use_cuda else encoder_outputs
-
-    loss = 0
-        
-    for ei in range(input_length):
-      encoder_output, encoder_hidden = encoder(input_tensor[ei], batch_size, encoder_hidden)
-      encoder_outputs[ei] = encoder_output[0]
-
-    decoder_input = Variable(torch.LongTensor([SOS_token] * batch_size))
-    decoder_input = decoder_input.cuda() if use_cuda else decoder_input
-
-    decoder_hidden = encoder_hidden
-
-    for di in range(target_length):
-      decoder_output, decoder_hidden = decoder(decoder_input, batch_size, decoder_hidden)
-      topv, topi = decoder_output.data.topk(1)
-      decoder_input = torch.cat(tuple(topi))
-
-      decoder_input = decoder_input.cuda() if use_cuda else decoder_input
-
-      loss += criterion(decoder_output, target_tensor[di])
-
-    return loss.item() / target_length
-
-
-def evaluate(encoder, decoder, loader, configuration, criterion , max_length):
-
-    batch_size = configuration['batch_size']
-    total = 0
-    correct = 0
-    
-    for batch_x, batch_y in loader:
+        batch_size = configuration['batch_size']
 
         encoder_hidden = encoder.initHidden(batch_size)
 
-        input_variable = Variable(batch_x.transpose(0, 1))
-        target_variable = Variable(batch_y.transpose(0, 1))
-        
+        input_tensor = Variable(input_tensor.transpose(0, 1))
+        target_tensor = Variable(target_tensor.transpose(0, 1))
+            
         if configuration["cell_type"] == "LSTM":
             encoder_cell_state = encoder.initHidden(batch_size)
             encoder_hidden = (encoder_hidden, encoder_cell_state)
 
-        input_length = input_variable.size()[0]
-        target_length = target_variable.size()[0]
-
-        output = torch.LongTensor(target_length, batch_size)
+        input_length = input_tensor.size()[0]
+        target_length = target_tensor.size()[0]
 
         encoder_outputs = Variable(torch.zeros(max_length, batch_size, encoder.hidden_size))
         encoder_outputs = encoder_outputs.cuda() if use_cuda else encoder_outputs
-        
+
+        loss = 0
+            
         for ei in range(input_length):
-            encoder_output, encoder_hidden = encoder(input_variable[ei], batch_size, encoder_hidden)
-            encoder_outputs[ei] = encoder_output[0]
+            encoder_output, encoder_hidden = encoder(input_tensor[ei], batch_size, encoder_hidden)
 
         decoder_input = Variable(torch.LongTensor([SOS_token] * batch_size))
         decoder_input = decoder_input.cuda() if use_cuda else decoder_input
@@ -309,30 +268,82 @@ def evaluate(encoder, decoder, loader, configuration, criterion , max_length):
             decoder_output, decoder_hidden = decoder(decoder_input, batch_size, decoder_hidden)
             topv, topi = decoder_output.data.topk(1)
             decoder_input = torch.cat(tuple(topi))
-            output[di] = torch.cat(tuple(topi))
 
-        output = output.transpose(0,1)
-        for di in range(output.size()[0]):
-            ignore = [SOS_token, EOS_token, PAD_token]
-            sent = [configuration['output_lang'].index2char[letter.item()] for letter in output[di] if letter not in ignore]
-            y = [configuration['output_lang'].index2char[letter.item()] for letter in batch_y[di] if letter not in ignore]
-            if sent == y:
-                correct += 1
-            total += 1
-    return str((correct/total)*100)
+            decoder_input = decoder_input.cuda() if use_cuda else decoder_input
+            loss += criterion(decoder_output, target_tensor[di])
 
-def trainIters(encoder, decoder, train_loader, val_loader, test_loader, learning_rate, configuration):
+    return loss.item() / target_length
+
+def evaluate(encoder, decoder, loader, configuration, criterion , max_length):
+
+    with torch.no_grad():
+
+        batch_size = configuration['batch_size']
+        total = 0
+        correct = 0
+        
+        for batch_x, batch_y in loader:
+
+            encoder_hidden = encoder.initHidden(batch_size)
+
+            input_variable = Variable(batch_x.transpose(0, 1))
+            target_variable = Variable(batch_y.transpose(0, 1))
+            
+            if configuration["cell_type"] == "LSTM":
+                encoder_cell_state = encoder.initHidden(batch_size)
+                encoder_hidden = (encoder_hidden, encoder_cell_state)
+
+            input_length = input_variable.size()[0]
+            target_length = target_variable.size()[0]
+
+            output = torch.LongTensor(target_length, batch_size)
+
+            encoder_outputs = Variable(torch.zeros(max_length, batch_size, encoder.hidden_size))
+            encoder_outputs = encoder_outputs.cuda() if use_cuda else encoder_outputs
+            
+            for ei in range(input_length):
+                encoder_output, encoder_hidden = encoder(input_variable[ei], batch_size, encoder_hidden)
+
+            decoder_input = Variable(torch.LongTensor([SOS_token] * batch_size))
+            decoder_input = decoder_input.cuda() if use_cuda else decoder_input
+
+            decoder_hidden = encoder_hidden
+
+            for di in range(target_length):
+                decoder_output, decoder_hidden = decoder(decoder_input, batch_size, decoder_hidden)
+                topv, topi = decoder_output.data.topk(1)
+                decoder_input = torch.cat(tuple(topi))
+                output[di] = torch.cat(tuple(topi))
+
+            output = output.transpose(0,1)
+            for di in range(output.size()[0]):
+                ignore = [SOS_token, EOS_token, PAD_token]
+                sent = [configuration['output_lang'].index2char[letter.item()] for letter in output[di] if letter not in ignore]
+                y = [configuration['output_lang'].index2char[letter.item()] for letter in batch_y[di] if letter not in ignore]
+                if sent == y:
+                    correct += 1
+                total += 1
+
+    return (correct/total)*100
+
+def trainIters(encoder, decoder, train_loader, val_loader, test_loader, learning_rate, configuration, wandb_flag):
 
     max_length = configuration['max_length_word']
 
-    val_plot_losses = []
+    train_loss_list, val_loss_list, train_acc_list, val_acc_list = [],[],[],[]
 
-    encoder_optimizer = optim.NAdam(encoder.parameters(),lr=learning_rate)
-    decoder_optimizer = optim.NAdam(decoder.parameters(),lr=learning_rate)
+    encoder_optimizer, decoder_optimizer = None, None
+
+    if configuration['optimizer']=='nadam':
+        encoder_optimizer = optim.NAdam(encoder.parameters(),lr=learning_rate)
+        decoder_optimizer = optim.NAdam(decoder.parameters(),lr=learning_rate)
+    else:
+        encoder_optimizer = optim.Adam(encoder.parameters(),lr=learning_rate)
+        decoder_optimizer = optim.Adam(decoder.parameters(),lr=learning_rate)
 
     criterion = nn.NLLLoss()
     
-    ep = 2
+    ep = 15
 
     for i in range(ep):
         
@@ -352,8 +363,9 @@ def trainIters(encoder, decoder, train_loader, val_loader, test_loader, learning
             
             train_loss_total += loss
         
+        train_loss_total = train_loss_total/len(train_loader)
         print('ep : ', i, ' | ', end='')
-        print('train loss :', train_loss_total/len(train_loader), ' | ', end='')
+        print('train loss :', train_loss_total, ' | ', end='')
 
         for batchx, batchy in val_loader:
             loss = None
@@ -363,41 +375,49 @@ def trainIters(encoder, decoder, train_loader, val_loader, test_loader, learning
             
             val_loss_total += loss
 
+        val_loss_total = val_loss_total/len(val_loader)
+        train_acc = evaluate(encoder, decoder, train_loader, configuration, criterion, max_length)
+        val_acc = evaluate(encoder, decoder, val_loader, configuration, criterion, max_length)
+
+        train_loss_list.append(train_loss_total)
+        val_loss_list.append(val_loss_total)
+        train_acc_list.append(train_acc)
+        val_acc_list.append(val_acc)
         
-        val_plot_losses.append(val_loss_total/len(val_loader))
-        print("train accuracy : " ,evaluate(encoder, decoder, train_loader, configuration, criterion, max_length), ' | ', end='')
-        print('val loss :', val_loss_total/len(val_loader), ' | ', end='')
-        print("val accuracy : " ,evaluate(encoder, decoder, val_loader, configuration, criterion, max_length))
+        print("train accuracy : " ,train_acc, ' | ', end='')
+        print('val loss :', val_loss_total, ' | ', end='')
+        print("val accuracy : " ,val_acc)
+
+        if wandb_flag == True:
+            wandb.log({
+                "train_loss"           : train_loss_total,
+                "validation_loss"      : val_loss_total,
+                "train_accuracy"       : train_acc,
+                "validation_accuracy"  : val_acc
+                })
 
     temp = configuration['batch_size']
     configuration['batch_size'] = 1
     print("test accuracy for the model : " ,evaluate(encoder, decoder, test_loader, configuration, criterion, max_length))
     configuration['batch_size'] = temp
 
-    showPlot(val_plot_losses)
-
-def showPlot(points):
-    plt.figure()
-    plt.plot(points)
-    plt.show()
-
 def main():
 
     configuration = {
             "hidden_size" : 256,
             "source_lang" : 'eng',
-            "target_lang" : 'tel',
+            "target_lang" : 'hin',
             "cell_type"   : 'LSTM',
-            "num_layers_encoder" : 3,
-            "num_layers_decoder" : 3,
+            "num_layers_encoder" : 2,
+            "num_layers_decoder" : 2,
             "drop_out"    : 0.2, 
             "embedding_size" : 256,
-            "bi_directional" : False,
+            "bi_directional" : True,
             "batch_size" : 32,
             "attention" : False ,
+            "optimizer" : 'nadam',
         }
     
-    dir = 'aksharantar_sampled'
     train_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_train.csv')
     validation_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_valid.csv')
     test_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_test.csv')
@@ -448,6 +468,6 @@ def main():
     test_loader = torch.utils.data.DataLoader(test_pairs, batch_size=1, shuffle=True)
 
     if configuration['attention'] == False :
-        trainIters(encoder1, decoder1, train_loader, val_loader, test_loader, learning_rate, configuration)
+        trainIters(encoder1, decoder1, train_loader, val_loader, test_loader, learning_rate, configuration,False)
 
 main()
