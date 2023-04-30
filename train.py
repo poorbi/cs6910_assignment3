@@ -11,6 +11,44 @@ import matplotlib.pyplot as plt
 import torch.nn.functional as F
 from torch.autograd import Variable
 
+parser=argparse.ArgumentParser()
+
+parser.add_argument('-wp',      '--wandb_project',      help='project name',                                                    type=str,       default='CS6910_A3_')
+parser.add_argument('-we',      '--wandb_entity',       help='entity name',                                                     type=str,       default='cs22m064'  )
+parser.add_argument('-e',       '--epochs',             help='epochs',                          choices=[5,10],                 type=int,       default=5           )
+parser.add_argument('-b',       '--batch_size',         help='batch sizes',                     choices=[32,64,128],            type=int,       default=32          )
+parser.add_argument('-o',       '--optimizer',          help='optimizer',                       choices=['adam','nadam'],       type=str,       default='adam'      )
+parser.add_argument('-lr',      '--learning_rate',      help='learning rates',                  choices=[1e-2,1e-3],            type=float,     default=1e-2        )
+parser.add_argument('-nle',     '--num_layers_en',      help='number of layers in encoder',     choices=[1,2,3],                type=int,       default=2           )
+parser.add_argument('-nld',     '--num_layers_dec',     help='number of layers in decoder',     choices=[1,2,3],                type=int,       default=2           )
+parser.add_argument('-sz',      '--hidden_size',        help='hidden layer size',               choices=[16,32,64,256],         type=int,       default=256         )
+parser.add_argument('-il',      '--input_lang',         help='input language',                  choices=['hin','tel'],          type=str,       default='hin'       )
+parser.add_argument('-tl',      '--target_lang',        help='target language',                 choices=['hin','tel'],          type=str,       default='hin'       )
+parser.add_argument('-ct',      '--cell_type',          help='cell type',                       choices=['LSTM','GRU','RNN'],   type=str,       default='LSTM'      )
+parser.add_argument('-do',      '--drop_out',           help='drop out',                        choices=[0.0,0.2,0.3],          type=float,     default='0.2'       )
+parser.add_argument('-es',      '--embedding_size',     help='embedding size',                  choices=[16,32,64,256],         type=int,       default=256         )
+parser.add_argument('-bd',      '--bidirectional',      help='bidirectional',                   choices=[True,False],           type=bool,      default=False       )
+parser.add_argument('-at',      '--attention',          help='attention',                       choices=[True,False],           type=bool,      default=False       )
+
+args=parser.parse_args()
+
+project_name_ap     = args.wandb_project
+entity_name_ap      = args.wandb_entity
+epochs_ap           = args.epochs
+batch_size_ap       = args.batch_size
+optimizer_ap        = args.optimizer
+learning_rate_ap    = args.learning_rate
+num_layers_en_ap    = args.num_layers_en
+num_layers_dec_ap   = args.num_layers_dec
+hidden_size_ap      = args.hidden_size
+input_lang_ap       = args.input_lang
+target_lang_ap      = args.target_lang
+cell_type_ap        = args.cell_type
+drop_out_ap         = args.drop_out
+embedding_size_ap   = args.embedding_size
+bidirectional_ap    = args.bidirectional
+attention_ap        = args.attention
+
 dir = 'aksharantar_sampled'
 use_cuda = torch.cuda.is_available()
 
@@ -18,6 +56,55 @@ SOS_token = 0
 EOS_token = 1
 UNK_token = 3
 PAD_token = 4
+
+sweep_config ={
+    'method':'bayes'
+}
+
+metric = {
+    'name' : 'validation_accuracy',
+    'goal' : 'maximize'
+}
+sweep_config['metric'] = metric
+
+parameters_dict={
+    'epochs':{
+        'values' : [5,10]
+    },
+    'hidden_size':{
+        'values' : [64,128,256]
+    },
+    'cell_type':{
+        'values' : ['LSTM','RNN','GRU']
+    },
+    'learning_rate':{
+        'values' : [1e-2,1e-3]
+    },
+    'num_layers_en':{
+        'values' : [1,2,3]
+    },
+    'num_layers_dec':{
+        'values' : [1,2,3]
+    },
+    'drop_out':{
+        'values' : [0.0,0.2,0.3]
+    },
+    'embedding_size':{
+        'values' : [64,128,256]
+    },
+    'batch_size':{
+        'values' : [32,64,128]
+    },
+    'optimizer':{
+        'values' : ['adam','nadam']
+    },
+    'bidirectional':{
+        'values' : [True,False]
+    }
+}
+sweep_config['parameters'] = parameters_dict
+
+sweep_id = wandb.sweep(sweep_config, project=project_name_ap)
 
 class Vocabulary:
 
@@ -94,12 +181,12 @@ class EncoderRNN(nn.Module):
         output, hidden = self.cell_layer(output, hidden)
         return output, hidden
 
-    def initHidden(self ,batch_size):
+    def initHidden(self ,batch_size, num_layers_enc):
         res = None
         if self.bi_directional:
-            res = torch.zeros(self.num_layers_encoder * 2, batch_size, self.hidden_size)
+            res = torch.zeros(num_layers_enc* 2, batch_size, self.hidden_size)
         else:
-            res = torch.zeros(self.num_layers_encoder, batch_size, self.hidden_size)
+            res = torch.zeros(num_layers_enc, batch_size, self.hidden_size)
         if use_cuda : 
             return res.cuda()
         else :
@@ -143,13 +230,6 @@ class DecoderRNN(nn.Module):
         output = self.softmax(self.out(output[0]))
         return output, hidden
 
-    # def initHidden(self, batch_size):
-    #     res = torch.zeros(self.num_layers_decoder, batch_size, self.hidden_size)
-    #     if use_cuda : 
-    #         return res.cuda()
-    #     else :
-    #         return res
-
 def indexesFromWord(lang, word):
     index_list = []
     for char in word:
@@ -180,13 +260,14 @@ def variablesFromPairs(input_lang, output_lang, pairs, max_length):
 def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, configuration, max_length, teacher_forcing_ratio = 0.5):
     
     batch_size = configuration['batch_size']
-    encoder_hidden = encoder.initHidden(batch_size)
+    num_layers_enc = configuration['num_layers_encoder']
+    encoder_hidden = encoder.initHidden(batch_size,num_layers_enc)
 
     input_tensor = Variable(input_tensor.transpose(0, 1))
     target_tensor = Variable(target_tensor.transpose(0, 1))
 
     if configuration["cell_type"] == "LSTM":
-        encoder_cell_state = encoder.initHidden(batch_size)
+        encoder_cell_state = encoder.initHidden(batch_size,num_layers_enc)
         encoder_hidden = (encoder_hidden, encoder_cell_state)
 
     encoder_optimizer.zero_grad()
@@ -194,9 +275,6 @@ def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, deco
 
     input_length = input_tensor.size(0)
     target_length = target_tensor.size(0)
-
-    encoder_outputs = Variable(torch.zeros(max_length, batch_size, encoder.hidden_size))
-    encoder_outputs = encoder_outputs.cuda() if use_cuda else encoder_outputs
 
     loss = 0
 
@@ -238,21 +316,18 @@ def cal_val_loss(encoder, decoder, input_tensor, target_tensor, configuration, c
     with torch.no_grad():
 
         batch_size = configuration['batch_size']
-
-        encoder_hidden = encoder.initHidden(batch_size)
+        num_layers_enc = configuration['num_layers_encoder']
+        encoder_hidden = encoder.initHidden(batch_size,num_layers_enc)
 
         input_tensor = Variable(input_tensor.transpose(0, 1))
         target_tensor = Variable(target_tensor.transpose(0, 1))
             
         if configuration["cell_type"] == "LSTM":
-            encoder_cell_state = encoder.initHidden(batch_size)
+            encoder_cell_state = encoder.initHidden(batch_size,num_layers_enc)
             encoder_hidden = (encoder_hidden, encoder_cell_state)
 
         input_length = input_tensor.size()[0]
         target_length = target_tensor.size()[0]
-
-        encoder_outputs = Variable(torch.zeros(max_length, batch_size, encoder.hidden_size))
-        encoder_outputs = encoder_outputs.cuda() if use_cuda else encoder_outputs
 
         loss = 0
             
@@ -283,14 +358,14 @@ def evaluate(encoder, decoder, loader, configuration, criterion , max_length):
         correct = 0
         
         for batch_x, batch_y in loader:
-
-            encoder_hidden = encoder.initHidden(batch_size)
+            num_layers_enc = configuration['num_layers_encoder']
+            encoder_hidden = encoder.initHidden(batch_size,num_layers_enc)
 
             input_variable = Variable(batch_x.transpose(0, 1))
             target_variable = Variable(batch_y.transpose(0, 1))
             
             if configuration["cell_type"] == "LSTM":
-                encoder_cell_state = encoder.initHidden(batch_size)
+                encoder_cell_state = encoder.initHidden(batch_size,num_layers_enc)
                 encoder_hidden = (encoder_hidden, encoder_cell_state)
 
             input_length = input_variable.size()[0]
@@ -343,7 +418,7 @@ def trainIters(encoder, decoder, train_loader, val_loader, test_loader, learning
 
     criterion = nn.NLLLoss()
     
-    ep = 15
+    ep = configuration['epochs']
 
     for i in range(ep):
         
@@ -401,73 +476,98 @@ def trainIters(encoder, decoder, train_loader, val_loader, test_loader, learning
     print("test accuracy for the model : " ,evaluate(encoder, decoder, test_loader, configuration, criterion, max_length))
     configuration['batch_size'] = temp
 
-def main():
 
-    configuration = {
-            "hidden_size" : 256,
-            "source_lang" : 'eng',
-            "target_lang" : 'hin',
-            "cell_type"   : 'LSTM',
-            "num_layers_encoder" : 2,
-            "num_layers_decoder" : 2,
-            "drop_out"    : 0.2, 
-            "embedding_size" : 256,
-            "bi_directional" : True,
-            "batch_size" : 32,
-            "attention" : False ,
-            "optimizer" : 'nadam',
-        }
-    
-    train_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_train.csv')
-    validation_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_valid.csv')
-    test_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_test.csv')
+def main(config = None):
 
-    train_prepared_data= prepareData(train_path,configuration['source_lang'], configuration['target_lang'])
+    with wandb.init(config = config, entity = entity_name_ap) as run:
+        
+        config = wandb.config
+        run.name = 'hs_'+str(config.hidden_size)+'_bs_'+str(config.batch_size)+'_ct_'+config.cell_type+'_es_'+str(config.embedding_size)+'_do_'+str(config.drop_out)+'_nle_'+str(config.num_layers_en)+'_nld_'+str(config.num_layers_dec)+'_lr_'+str(config.learning_rate)+'_bd_'+str(config.bidirectional)
 
-    input_lang = train_prepared_data['input_lang']
-    output_lang = train_prepared_data['output_lang']
-    pairs = train_prepared_data['pairs']
-    max_input_length = train_prepared_data['max_input_length']
-    max_target_length = train_prepared_data['max_target_length']
-    
-    val_prepared_data= prepareData(validation_path,configuration['source_lang'], configuration['target_lang'])
+        configuration = {
 
-    val_pairs = val_prepared_data['pairs']
-    max_input_length_val = val_prepared_data['max_input_length']
-    max_target_length_val = val_prepared_data['max_target_length']
+                'hidden_size'         : config.hidden_size,
+                'source_lang'         : input_lang_ap,
+                'target_lang'         : target_lang_ap,
+                'cell_type'           : config.cell_type,
+                'num_layers_encoder'  : config.num_layers_en,
+                'num_layers_decoder'  : config.num_layers_en,
+                'drop_out'            : config.drop_out, 
+                'embedding_size'      : config.embedding_size,
+                'bi_directional'      : config.bidirectional,
+                'batch_size'          : config.batch_size,
+                'attention'           : attention_ap,
+                'epochs'              : config.epochs,
+                'optimizer'           : config.optimizer
 
-    test_prepared_data= prepareData(validation_path, configuration['source_lang'], configuration['target_lang'])
+                # 'hidden_size'         : hidden_size_ap,
+                # 'source_lang'         : input_lang_ap,
+                # 'target_lang'         : target_lang_ap,
+                # 'cell_type'           : cell_type_ap,
+                # 'num_layers_encoder'  : num_layers_en_ap,
+                # 'num_layers_decoder'  : num_layers_dec_ap,
+                # 'drop_out'            : drop_out_ap, 
+                # 'embedding_size'      : embedding_size_ap,
+                # 'bi_directional'      : bidirectional_ap,
+                # 'batch_size'          : batch_size_ap,
+                # 'attention'           : attention_ap
+            }
+        
+        
+        train_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_train.csv')
+        validation_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_valid.csv')
+        test_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_test.csv')
 
-    test_pairs = test_prepared_data['pairs']
-    max_input_length_test = test_prepared_data['max_input_length']
-    max_target_length_test = test_prepared_data['max_target_length']
+        train_prepared_data= prepareData(train_path,configuration['source_lang'], configuration['target_lang'])
 
-    max_list = [max_input_length, max_target_length, max_input_length_val, max_target_length_val, max_input_length_test, max_target_length_test]
-    max_len_all = max(max_list)
+        input_lang = train_prepared_data['input_lang']
+        output_lang = train_prepared_data['output_lang']
+        pairs = train_prepared_data['pairs']
+        max_input_length = train_prepared_data['max_input_length']
+        max_target_length = train_prepared_data['max_target_length']
+        
+        val_prepared_data= prepareData(validation_path,configuration['source_lang'], configuration['target_lang'])
 
-    max_len = max(max_input_length, max_target_length) + 2
+        val_pairs = val_prepared_data['pairs']
+        max_input_length_val = val_prepared_data['max_input_length']
+        max_target_length_val = val_prepared_data['max_target_length']
 
-    configuration['input_lang'] = input_lang
-    configuration['output_lang'] = output_lang
-    configuration['max_length_word'] = max_len_all + 1
+        test_prepared_data= prepareData(validation_path, configuration['source_lang'], configuration['target_lang'])
 
-    learning_rate = 0.001
+        test_pairs = test_prepared_data['pairs']
+        max_input_length_test = test_prepared_data['max_input_length']
+        max_target_length_test = test_prepared_data['max_target_length']
 
-    encoder1 = EncoderRNN(input_lang.n_chars, configuration)
-    decoder1 = DecoderRNN(configuration, output_lang.n_chars)
-    if use_cuda:
-        encoder1=encoder1.cuda()
-        decoder1=decoder1.cuda()
+        max_list = [max_input_length, max_target_length, max_input_length_val, max_target_length_val, max_input_length_test, max_target_length_test]
+        max_len_all = max(max_list)
 
-    pairs = variablesFromPairs(configuration['input_lang'], configuration['output_lang'], pairs , configuration['max_length_word'])
-    val_pairs = variablesFromPairs(configuration['input_lang'], configuration['output_lang'], val_pairs, configuration['max_length_word'])
-    test_pairs = variablesFromPairs(configuration['input_lang'], configuration['output_lang'], test_pairs, configuration['max_length_word'])
+        max_len = max(max_input_length, max_target_length) + 2
 
-    train_loader = torch.utils.data.DataLoader(pairs, batch_size=configuration['batch_size'], shuffle=True)
-    val_loader = torch.utils.data.DataLoader(val_pairs, batch_size=configuration['batch_size'], shuffle=True)
-    test_loader = torch.utils.data.DataLoader(test_pairs, batch_size=1, shuffle=True)
+        configuration['input_lang'] = input_lang
+        configuration['output_lang'] = output_lang
+        configuration['max_length_word'] = max_len_all + 1
 
-    if configuration['attention'] == False :
-        trainIters(encoder1, decoder1, train_loader, val_loader, test_loader, learning_rate, configuration,False)
+        print(configuration['max_length_word'])
 
-main()
+        encoder1 = EncoderRNN(input_lang.n_chars, configuration)
+        decoder1 = DecoderRNN(configuration, output_lang.n_chars)
+        if use_cuda:
+            encoder1=encoder1.cuda()
+            decoder1=decoder1.cuda()
+
+        pairs = variablesFromPairs(configuration['input_lang'], configuration['output_lang'], pairs , configuration['max_length_word'])
+        val_pairs = variablesFromPairs(configuration['input_lang'], configuration['output_lang'], val_pairs, configuration['max_length_word'])
+        test_pairs = variablesFromPairs(configuration['input_lang'], configuration['output_lang'], test_pairs, configuration['max_length_word'])
+
+        train_loader = torch.utils.data.DataLoader(pairs, batch_size=configuration['batch_size'], shuffle=True)
+        val_loader = torch.utils.data.DataLoader(val_pairs, batch_size=configuration['batch_size'], shuffle=True)
+        test_loader = torch.utils.data.DataLoader(test_pairs, batch_size=1, shuffle=True)
+
+        trainIters(encoder1, decoder1, train_loader, val_loader, test_loader, config.learning_rate, configuration, True)
+
+    # if configuration['attention'] == False :
+    #     trainIters(encoder1, decoder1, train_loader, val_loader, test_loader, learning_rate, configuration, True)
+
+# main()
+
+wandb.agent(sweep_id,main,count  = 50)
