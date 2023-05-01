@@ -28,7 +28,7 @@ parser.add_argument('-ct',      '--cell_type',          help='cell type',       
 parser.add_argument('-do',      '--drop_out',           help='drop out',                        choices=[0.0,0.2,0.3],          type=float,     default='0.2'       )
 parser.add_argument('-es',      '--embedding_size',     help='embedding size',                  choices=[16,32,64,256],         type=int,       default=256         )
 parser.add_argument('-bd',      '--bidirectional',      help='bidirectional',                   choices=[True,False],           type=bool,      default=False       )
-parser.add_argument('-at',      '--attention',          help='attention',                       choices=[True,False],           type=bool,      default=False       )
+parser.add_argument('-at',      '--attention',          help='attention',                       choices=[True,False],           type=bool,      default=True       )
 
 args=parser.parse_args()
 
@@ -72,7 +72,7 @@ parameters_dict={
         'values' : [5,10]
     },
     'hidden_size':{
-        'values' : [64,128,256]
+        'values' : [128,256,512]
     },
     'cell_type':{
         'values' : ['LSTM','RNN','GRU']
@@ -90,7 +90,7 @@ parameters_dict={
         'values' : [0.0,0.2,0.3]
     },
     'embedding_size':{
-        'values' : [64,128,256]
+        'values' : [64,128,256,512]
     },
     'batch_size':{
         'values' : [32,64,128]
@@ -229,6 +229,53 @@ class DecoderRNN(nn.Module):
         
         output = self.softmax(self.out(output[0]))
         return output, hidden
+
+class DecoderAttention(nn.Module) :
+
+    def __init__(self, configs, output_size) :
+
+        super(DecoderAttention, self).__init__()
+        
+        self.hidden_size = configs['hidden_size']
+        self.embedding_size = configs['embedding_size']
+        self.cell_type = configs['cell_type']
+        self.num_layers_decoder = configs['num_layers_decoder']
+        self.drop_out = configs['drop_out']
+        self.max_length_word = configs['max_length_word']
+
+        self.embedding = nn.Embedding(output_size, embedding_dim = self.embedding_size)
+        self.attention_layer = nn.Linear(self.embedding_size + self.hidden_size, self.max_length_word + 1)
+        self.attention_combine = nn.Linear(self.embedding_size + self.hidden_size, self.embedding_size)
+        self.dropout = nn.Dropout(self.drop_out)
+
+        self.cell_layer = None
+        if self.cell_type == 'RNN':
+            self.cell_layer = nn.RNN(self.embedding_size, self.hidden_size, num_layers = self.num_layers_decoder, dropout = self.drop_out)
+        elif self.cell_type == 'GRU':
+            self.cell_layer =   nn.GRU(self.embedding_size, self.hidden_size, num_layers = self.num_layers_decoder, dropout = self.drop_out)
+        elif self.cell_type == 'LSTM':
+            self.cell_layer = nn.LSTM(self.embedding_size, self.hidden_size, num_layers = self.num_layers_decoder, dropout = self.drop_out)
+        self.out = nn.Linear(self.hidden_size, output_size)
+
+    def forward(self, input, batch_size, hidden, encoder_outputs) :
+        
+        embedded = self.embedding(input).view(1, batch_size, -1)
+        
+        attention_weights = None
+        if self.cell_type == 'LSTM' :
+            attention_weights = F.softmax(self.attention_layer(torch.cat((embedded[0], hidden[0][0]), 1)), dim = 1)
+        
+        else :
+            attention_weights = F.softmax(self.attention_ayer(torch.cat((embedded[0], hidden[0]), 1)), dim = 1)
+
+        attention_applied = torch.bmm(attention_weights.view(batch_size,1,self.max_length_word+1), encoder_outputs).view(1,batch_size,-1)
+        output = torch.cat((embedded[0], attention_applied[0]), 1)
+        output = self.attention_combine(output).unsqueeze(0)
+        output = F.relu(output)
+        output, hidden = self.cell_layer(output, hidden)
+        output = F.log_softmax(self.out(output[0]), dim = 1)
+        
+        return output, hidden, attention_weights
 
 def indexesFromWord(lang, word):
     index_list = []
@@ -401,6 +448,156 @@ def evaluate(encoder, decoder, loader, configuration, criterion , max_length):
 
     return (correct/total)*100
 
+def train_with_attn(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, configuration, max_length, teacher_forcing_ratio = 0.5):
+    
+    batch_size = configuration['batch_size']
+    encoder_hidden = encoder.initHidden(batch_size)
+
+    input_tensor = Variable(input_tensor.transpose(0, 1))
+    target_tensor = Variable(target_tensor.transpose(0, 1))
+
+    if configuration["cell_type"] == "LSTM":
+        encoder_cell_state = encoder.initHidden(batch_size)
+        encoder_hidden = (encoder_hidden, encoder_cell_state)
+
+    encoder_optimizer.zero_grad()
+    decoder_optimizer.zero_grad()
+
+    input_length = input_tensor.size(0)
+    target_length = target_tensor.size(0)
+
+    encoder_outputs = Variable(torch.zeros(max_length, batch_size, encoder.hidden_size))
+    encoder_outputs = encoder_outputs.cuda() if use_cuda else encoder_outputs
+
+    loss = 0
+
+    for ei in range(input_length):
+        encoder_output, encoder_hidden = encoder(input_tensor[ei], batch_size, encoder_hidden)
+        encoder_outputs[ei] = encoder_output[0]
+
+    decoder_input = Variable(torch.LongTensor([SOS_token]*batch_size))
+    decoder_input = decoder_input.cuda() if use_cuda else decoder_input
+
+    decoder_hidden = encoder_hidden
+
+    use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
+
+    if use_teacher_forcing:
+        for di in range(target_length):
+            decoder_output, decoder_hidden, decoder_attention= decoder(decoder_input, batch_size, decoder_hidden, encoder_outputs.reshape(batch_size,max_length, encoder.hidden_size))
+            loss += criterion(decoder_output, target_tensor[di])
+            decoder_input = target_tensor[di]
+
+    else:
+        for di in range(target_length):
+            decoder_output, decoder_hidden, decoder_attention = decoder(decoder_input, batch_size,decoder_hidden, encoder_outputs.reshape(batch_size,max_length, encoder.hidden_size))
+            topv, topi = decoder_output.data.topk(1)
+            decoder_input = torch.cat(tuple(topi))
+
+            decoder_input = decoder_input.cuda() if use_cuda else decoder_input
+
+            loss += criterion(decoder_output, target_tensor[di])
+
+    loss.backward()
+
+    encoder_optimizer.step()
+    decoder_optimizer.step()
+
+    return loss.item() / target_length
+
+def evaluate_with_attn(encoder, decoder, loader, configuration, criterion , max_length):
+
+    with torch.no_grad():
+
+        batch_size = configuration['batch_size']
+        total = 0
+        correct = 0
+        
+        for batch_x, batch_y in loader:
+
+            encoder_hidden = encoder.initHidden(batch_size)
+
+            input_variable = Variable(batch_x.transpose(0, 1))
+            target_variable = Variable(batch_y.transpose(0, 1))
+            
+            if configuration["cell_type"] == "LSTM":
+                encoder_cell_state = encoder.initHidden(batch_size)
+                encoder_hidden = (encoder_hidden, encoder_cell_state)
+
+            input_length = input_variable.size()[0]
+            target_length = target_variable.size()[0]
+
+            output = torch.LongTensor(target_length, batch_size)
+
+            encoder_outputs = Variable(torch.zeros(max_length, batch_size, encoder.hidden_size))
+            encoder_outputs = encoder_outputs.cuda() if use_cuda else encoder_outputs
+            
+            for ei in range(input_length):
+                encoder_output, encoder_hidden = encoder(input_variable[ei], batch_size, encoder_hidden)
+
+            decoder_input = Variable(torch.LongTensor([SOS_token] * batch_size))
+            decoder_input = decoder_input.cuda() if use_cuda else decoder_input
+
+            decoder_hidden = encoder_hidden
+
+            for di in range(target_length):
+                decoder_output, decoder_hidden, decoder_attention = decoder(decoder_input, batch_size, decoder_hidden,encoder_outputs.reshape(batch_size,max_length, encoder.hidden_size))
+                topv, topi = decoder_output.data.topk(1)
+                decoder_input = torch.cat(tuple(topi))
+                output[di] = torch.cat(tuple(topi))
+
+            output = output.transpose(0,1)
+            for di in range(output.size()[0]):
+                ignore = [SOS_token, EOS_token, PAD_token]
+                sent = [configuration['output_lang'].index2char[letter.item()] for letter in output[di] if letter not in ignore]
+                y = [configuration['output_lang'].index2char[letter.item()] for letter in batch_y[di] if letter not in ignore]
+                if sent == y:
+                    correct += 1
+                total += 1
+
+    return (correct/total)*100
+
+def cal_val_loss_with_attn(encoder, decoder, input_tensor, target_tensor, configuration, criterion , max_length):
+
+    with torch.no_grad():
+
+        batch_size = configuration['batch_size']
+
+        encoder_hidden = encoder.initHidden(batch_size)
+
+        input_tensor = Variable(input_tensor.transpose(0, 1))
+        target_tensor = Variable(target_tensor.transpose(0, 1))
+            
+        if configuration["cell_type"] == "LSTM":
+            encoder_cell_state = encoder.initHidden(batch_size)
+            encoder_hidden = (encoder_hidden, encoder_cell_state)
+
+        input_length = input_tensor.size()[0]
+        target_length = target_tensor.size()[0]
+
+        encoder_outputs = Variable(torch.zeros(max_length, batch_size, encoder.hidden_size))
+        encoder_outputs = encoder_outputs.cuda() if use_cuda else encoder_outputs
+
+        loss = 0
+            
+        for ei in range(input_length):
+            encoder_output, encoder_hidden = encoder(input_tensor[ei], batch_size, encoder_hidden)
+
+        decoder_input = Variable(torch.LongTensor([SOS_token] * batch_size))
+        decoder_input = decoder_input.cuda() if use_cuda else decoder_input
+
+        decoder_hidden = encoder_hidden
+
+        for di in range(target_length):
+            decoder_output, decoder_hidden, decoder_attention = decoder(decoder_input, batch_size, decoder_hidden, encoder_outputs.reshape(batch_size,max_length, encoder.hidden_size))
+            topv, topi = decoder_output.data.topk(1)
+            decoder_input = torch.cat(tuple(topi))
+
+            decoder_input = decoder_input.cuda() if use_cuda else decoder_input
+            loss += criterion(decoder_output, target_tensor[di])
+
+    return loss.item() / target_length
+
 def trainIters(encoder, decoder, train_loader, val_loader, test_loader, learning_rate, configuration, wandb_flag):
 
     max_length = configuration['max_length_word']
@@ -418,7 +615,7 @@ def trainIters(encoder, decoder, train_loader, val_loader, test_loader, learning
 
     criterion = nn.NLLLoss()
     
-    ep = configuration['epochs']
+    ep = 15
 
     for i in range(ep):
         
@@ -435,6 +632,8 @@ def trainIters(encoder, decoder, train_loader, val_loader, test_loader, learning
 
             if configuration['attention'] == False:
                 loss = train(batchx, batchy, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, configuration, max_length)
+            else:
+                loss = train_with_attn(batchx, batchy, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, configuration, max_length + 1)
             
             train_loss_total += loss
         
@@ -447,12 +646,26 @@ def trainIters(encoder, decoder, train_loader, val_loader, test_loader, learning
 
             if configuration['attention'] == False:
                 loss = cal_val_loss(encoder, decoder, batchx, batchy, configuration, criterion , max_length)
+            else:
+                loss = cal_val_loss_with_attn(encoder, decoder, batchx, batchy, configuration, criterion , max_length+1)
             
             val_loss_total += loss
 
         val_loss_total = val_loss_total/len(val_loader)
-        train_acc = evaluate(encoder, decoder, train_loader, configuration, criterion, max_length)
-        val_acc = evaluate(encoder, decoder, val_loader, configuration, criterion, max_length)
+
+        train_acc = 0
+        val_acc = 0
+        
+        if configuration['attention'] == False:
+            train_acc = evaluate(encoder, decoder, train_loader, configuration, criterion, max_length)
+        else:
+            train_acc = evaluate_with_attn(encoder, decoder, train_loader, configuration, criterion, max_length+1)
+
+        if configuration['attention'] == False:
+            val_acc = evaluate(encoder, decoder, val_loader, configuration, criterion, max_length)
+        else:
+            val_acc = evaluate_with_attn(encoder, decoder, val_loader, configuration, criterion, max_length+1)
+
 
         train_loss_list.append(train_loss_total)
         val_loss_list.append(val_loss_total)
@@ -473,7 +686,10 @@ def trainIters(encoder, decoder, train_loader, val_loader, test_loader, learning
 
     temp = configuration['batch_size']
     configuration['batch_size'] = 1
-    print("test accuracy for the model : " ,evaluate(encoder, decoder, test_loader, configuration, criterion, max_length))
+    if configuration['attention'] == False:
+        print("test accuracy for the model : " ,evaluate(encoder, decoder, test_loader, configuration, criterion, max_length))
+    else:
+        print("test accuracy for the model : " ,evaluate_with_attn(encoder, decoder, test_loader, configuration, criterion, max_length+1))
     configuration['batch_size'] = temp
 
 
@@ -494,7 +710,7 @@ def main(config = None):
                 'num_layers_decoder'  : config.num_layers_en,
                 'drop_out'            : config.drop_out, 
                 'embedding_size'      : config.embedding_size,
-                'bi_directional'      : config.bidirectional,
+                'bi_directional'      : bidirectional_ap,
                 'batch_size'          : config.batch_size,
                 'attention'           : attention_ap,
                 'epochs'              : config.epochs,
@@ -549,11 +765,13 @@ def main(config = None):
 
         print(configuration['max_length_word'])
 
-        encoder1 = EncoderRNN(input_lang.n_chars, configuration)
-        decoder1 = DecoderRNN(configuration, output_lang.n_chars)
-        if use_cuda:
-            encoder1=encoder1.cuda()
-            decoder1=decoder1.cuda()
+    encoder1 = EncoderRNN(input_lang.n_chars, configuration)
+    decoder1 = DecoderRNN(configuration, output_lang.n_chars)
+    attndecoder1 = DecoderAttention(configuration, output_lang.n_chars)
+    if use_cuda:
+        encoder1=encoder1.cuda()
+        decoder1=decoder1.cuda()
+        attndecoder1 = attndecoder1.cuda()
 
         pairs = variablesFromPairs(configuration['input_lang'], configuration['output_lang'], pairs , configuration['max_length_word'])
         val_pairs = variablesFromPairs(configuration['input_lang'], configuration['output_lang'], val_pairs, configuration['max_length_word'])
@@ -563,10 +781,10 @@ def main(config = None):
         val_loader = torch.utils.data.DataLoader(val_pairs, batch_size=configuration['batch_size'], shuffle=True)
         test_loader = torch.utils.data.DataLoader(test_pairs, batch_size=1, shuffle=True)
 
-        trainIters(encoder1, decoder1, train_loader, val_loader, test_loader, config.learning_rate, configuration, True)
-
-    # if configuration['attention'] == False :
-    #     trainIters(encoder1, decoder1, train_loader, val_loader, test_loader, learning_rate, configuration, True)
+    if configuration['attention'] == False :
+        trainIters(encoder1, decoder1, train_loader, val_loader, test_loader, config.learning_rate, configuration,False)
+    else : 
+        trainIters(encoder1, attndecoder1, train_loader, val_loader, test_loader, config.learning_rate, configuration,False)
 
 # main()
 
