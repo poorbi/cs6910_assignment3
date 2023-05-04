@@ -16,19 +16,19 @@ parser=argparse.ArgumentParser()
 parser.add_argument('-wp',      '--wandb_project',      help='project name',                                                    type=str,       default='CS6910_A3_')
 parser.add_argument('-we',      '--wandb_entity',       help='entity name',                                                     type=str,       default='cs22m064'  )
 parser.add_argument('-e',       '--epochs',             help='epochs',                          choices=[5,10],                 type=int,       default=10          )
-parser.add_argument('-b',       '--batch_size',         help='batch sizes',                     choices=[32,64,128],            type=int,       default=32          )
+parser.add_argument('-b',       '--batch_size',         help='batch sizes',                     choices=[32,64,128],            type=int,       default=64          )
 parser.add_argument('-o',       '--optimizer',          help='optimizer',                       choices=['adam','nadam'],       type=str,       default='nadam'     )
 parser.add_argument('-lr',      '--learning_rate',      help='learning rates',                  choices=[1e-2,1e-3],            type=float,     default=1e-3        )
 parser.add_argument('-nle',     '--num_layers_en',      help='number of layers in encoder',     choices=[1,2,3],                type=int,       default=3           )
-parser.add_argument('-nld',     '--num_layers_dec',     help='number of layers in decoder',     choices=[1,2,3],                type=int,       default=3           )
+parser.add_argument('-nld',     '--num_layers_dec',     help='number of layers in decoder',     choices=[1,2,3],                type=int,       default=2           )
 parser.add_argument('-sz',      '--hidden_size',        help='hidden layer size',               choices=[32,64,256,512],        type=int,       default=512         )
 parser.add_argument('-il',      '--input_lang',         help='input language',                  choices=['eng'],                type=str,       default='eng'       )
 parser.add_argument('-tl',      '--target_lang',        help='target language',                 choices=['hin','tel'],          type=str,       default='hin'       )
 parser.add_argument('-ct',      '--cell_type',          help='cell type',                       choices=['LSTM','GRU','RNN'],   type=str,       default='LSTM'      )
 parser.add_argument('-do',      '--drop_out',           help='drop out',                        choices=[0.0,0.2,0.3],          type=float,     default=0.2         )
-parser.add_argument('-es',      '--embedding_size',     help='embedding size',                  choices=[16,32,64,256],         type=int,       default=256         )
+parser.add_argument('-es',      '--embedding_size',     help='embedding size',                  choices=[16,32,64,256],         type=int,       default=128         )
 parser.add_argument('-bd',      '--bidirectional',      help='bidirectional',                   choices=[True,False],           type=bool,      default=False       )
-parser.add_argument('-at',      '--attention',          help='attention',                       choices=[True,False],           type=bool,      default=True        )
+parser.add_argument('-at',      '--attention',          help='attention',                       choices=[True,False],           type=bool,      default=False       )
 
 args=parser.parse_args()
 
@@ -782,7 +782,7 @@ def bestRun():
                 'target_lang'         : target_lang_ap,
                 'cell_type'           : cell_type_ap,
                 'num_layers_encoder'  : num_layers_en_ap,
-                'num_layers_decoder'  : num_layers_dec_ap,
+                'num_layers_decoder'  : num_layers_en_ap,
                 'drop_out'            : drop_out_ap, 
                 'embedding_size'      : embedding_size_ap,
                 'bi_directional'      : bidirectional_ap,
