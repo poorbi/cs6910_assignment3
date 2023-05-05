@@ -6,28 +6,28 @@ import argparse
 import pandas as pd
 import torch.nn as nn
 import torch.optim as optim
-from datetime import datetime
-import matplotlib.pyplot as plt
-import torch.nn.functional as F
 from torch.autograd import Variable
+from model import EncoderRNN
+from model import DecoderAttention
+from model import DecoderRNN
 
 parser=argparse.ArgumentParser()
 
 parser.add_argument('-wp',      '--wandb_project',      help='project name',                                                    type=str,       default='CS6910_A3_')
 parser.add_argument('-we',      '--wandb_entity',       help='entity name',                                                     type=str,       default='cs22m064'  )
-parser.add_argument('-e',       '--epochs',             help='epochs',                          choices=[5,10],                 type=int,       default=10          )
+parser.add_argument('-e',       '--epochs',             help='epochs',                          choices=[5,10],                 type=int,       default=2           )
 parser.add_argument('-b',       '--batch_size',         help='batch sizes',                     choices=[32,64,128],            type=int,       default=64          )
-parser.add_argument('-o',       '--optimizer',          help='optimizer',                       choices=['adam','nadam'],       type=str,       default='nadam'     )
+parser.add_argument('-o',       '--optimizer',          help='optimizer',                       choices=['adam','nadam'],       type=str,       default='adam'      )
 parser.add_argument('-lr',      '--learning_rate',      help='learning rates',                  choices=[1e-2,1e-3],            type=float,     default=1e-3        )
 parser.add_argument('-nle',     '--num_layers_en',      help='number of layers in encoder',     choices=[1,2,3],                type=int,       default=3           )
-parser.add_argument('-nld',     '--num_layers_dec',     help='number of layers in decoder',     choices=[1,2,3],                type=int,       default=2           )
-parser.add_argument('-sz',      '--hidden_size',        help='hidden layer size',               choices=[32,64,256,512],        type=int,       default=512         )
+parser.add_argument('-nld',     '--num_layers_dec',     help='number of layers in decoder',     choices=[1,2,3],                type=int,       default=1           )
+parser.add_argument('-sz',      '--hidden_size',        help='hidden layer size',               choices=[32,64,256,512],        type=int,       default=128         )
 parser.add_argument('-il',      '--input_lang',         help='input language',                  choices=['eng'],                type=str,       default='eng'       )
 parser.add_argument('-tl',      '--target_lang',        help='target language',                 choices=['hin','tel'],          type=str,       default='hin'       )
 parser.add_argument('-ct',      '--cell_type',          help='cell type',                       choices=['LSTM','GRU','RNN'],   type=str,       default='LSTM'      )
 parser.add_argument('-do',      '--drop_out',           help='drop out',                        choices=[0.0,0.2,0.3],          type=float,     default=0.2         )
 parser.add_argument('-es',      '--embedding_size',     help='embedding size',                  choices=[16,32,64,256],         type=int,       default=128         )
-parser.add_argument('-bd',      '--bidirectional',      help='bidirectional',                   choices=[True,False],           type=bool,      default=False       )
+parser.add_argument('-bd',      '--bidirectional',      help='bidirectional',                   choices=[True,False],           type=bool,      default=True        )
 parser.add_argument('-at',      '--attention',          help='attention',                       choices=[True,False],           type=bool,      default=False       )
 
 args=parser.parse_args()
@@ -152,132 +152,6 @@ def prepareData(lang1, lang2, dir):
 
     return prepared_data
 
-class EncoderRNN(nn.Module):
-
-    def __init__(self, input_size, configuration):
-        super(EncoderRNN, self).__init__()
-
-        self.embedding_size = configuration['embedding_size']
-        self.hidden_size = configuration['hidden_size']
-        self.num_layers_encoder = configuration["num_layers_encoder"]
-        self.cell_type = configuration["cell_type"]
-        self.drop_out = configuration['drop_out']
-        self.bi_directional = configuration['bi_directional']
-        self.embedding = nn.Embedding(input_size, self.embedding_size)
-        self.dropout = nn.Dropout(self.drop_out)
-
-        self.cell_layer = None
-        if self.cell_type == 'RNN':
-            self.cell_layer = nn.RNN(self.embedding_size, self.hidden_size, num_layers = self.num_layers_encoder, dropout = self.drop_out, bidirectional = self.bi_directional)
-        elif self.cell_type == 'GRU':
-            self.cell_layer = nn.GRU(self.embedding_size, self.hidden_size, num_layers = self.num_layers_encoder, dropout = self.drop_out, bidirectional = self.bi_directional)
-        elif self.cell_type == 'LSTM':
-            self.cell_layer = nn.LSTM(self.embedding_size, self.hidden_size, num_layers = self.num_layers_encoder, dropout = self.drop_out, bidirectional = self.bi_directional)
- 
-    def forward(self, input, batch_size, hidden):
-        embedded = self.embedding(input).view(1,batch_size, -1)
-        embedded = self.dropout(embedded)
-        output = embedded
-        output, hidden = self.cell_layer(output, hidden)
-        return output, hidden
-
-    def initHidden(self ,batch_size, num_layers_enc):
-        res = None
-        if self.bi_directional:
-            res = torch.zeros(num_layers_enc* 2, batch_size, self.hidden_size)
-        else:
-            res = torch.zeros(num_layers_enc, batch_size, self.hidden_size)
-        if use_cuda : 
-            return res.cuda()
-        else :
-            return res
-
-class DecoderRNN(nn.Module):
-    def __init__(self, configuration,  output_size):
-        super(DecoderRNN, self).__init__()
-
-        self.embedding_size = configuration['embedding_size']
-        self.hidden_size = configuration['hidden_size']
-        self.num_layers_decoder = configuration["num_layers_decoder"]
-        self.cell_type = configuration["cell_type"]
-        self.drop_out = configuration["drop_out"]
-        self.bi_directional = configuration["bi_directional"]
-        self.dropout = nn.Dropout(self.drop_out)
-        self.embedding = nn.Embedding(output_size, self.embedding_size)
-
-        self.cell_layer = None
-        if self.cell_type == 'RNN':
-            self.cell_layer = nn.RNN(self.embedding_size, self.hidden_size, num_layers = self.num_layers_decoder, dropout = self.drop_out, bidirectional = self.bi_directional)
-        elif self.cell_type == 'GRU':
-            self.cell_layer =   nn.GRU(self.embedding_size, self.hidden_size, num_layers = self.num_layers_decoder, dropout = self.drop_out, bidirectional = self.bi_directional)
-        elif self.cell_type == 'LSTM':
-            self.cell_layer = nn.LSTM(self.embedding_size, self.hidden_size, num_layers = self.num_layers_decoder, dropout = self.drop_out, bidirectional = self.bi_directional)
-        
-        if self.bi_directional:
-            self.out = nn.Linear(self.hidden_size * 2 ,output_size)
-        else:
-            self.out = nn.Linear(self.hidden_size, output_size)
-        
-        self.softmax = nn.LogSoftmax(dim=1)
-
-    def forward(self, input, batch_size, hidden):
-        
-        output = self.embedding(input).view(1,batch_size, -1)
-        output = self.dropout(output)
-        output = F.relu(output)
-        output, hidden = self.cell_layer(output, hidden)
-        output = self.out(output[0])
-        output = self.softmax(output)
-        return output, hidden
-
-class DecoderAttention(nn.Module) :
-
-    def __init__(self, configs, output_size) :
-
-        super(DecoderAttention, self).__init__()
-        
-        self.hidden_size = configs['hidden_size']
-        self.embedding_size = configs['embedding_size']
-        self.cell_type = configs['cell_type']
-        self.num_layers_decoder = configs['num_layers_decoder']
-        self.drop_out = configs['drop_out']
-        self.max_length_word = configs['max_length_word']
-
-        self.embedding = nn.Embedding(output_size, embedding_dim = self.embedding_size)
-        self.attention_layer = nn.Linear(self.embedding_size + self.hidden_size, self.max_length_word + 1)
-        self.attention_combine = nn.Linear(self.embedding_size + self.hidden_size, self.embedding_size)
-        self.dropout = nn.Dropout(self.drop_out)
-
-        self.cell_layer = None
-        if self.cell_type == 'RNN':
-            self.cell_layer = nn.RNN(self.embedding_size, self.hidden_size, num_layers = self.num_layers_decoder, dropout = self.drop_out)
-        elif self.cell_type == 'GRU':
-            self.cell_layer =   nn.GRU(self.embedding_size, self.hidden_size, num_layers = self.num_layers_decoder, dropout = self.drop_out)
-        elif self.cell_type == 'LSTM':
-            self.cell_layer = nn.LSTM(self.embedding_size, self.hidden_size, num_layers = self.num_layers_decoder, dropout = self.drop_out)
-        self.out = nn.Linear(self.hidden_size, output_size)
-
-    def forward(self, input, batch_size, hidden, encoder_outputs) :
-        
-        embedded = self.embedding(input).view(1, batch_size, -1)
-        
-        attention_weights = None
-        if self.cell_type == 'LSTM' :
-            attention_weights = F.softmax(self.attention_layer(torch.cat((embedded[0], hidden[0][0]), 1)), dim = 1)
-        
-        else :
-            attention_weights = F.softmax(self.attention_layer(torch.cat((embedded[0], hidden[0]), 1)), dim = 1)
-
-        attention_applied = torch.bmm(attention_weights.view(batch_size,1,self.max_length_word+1), encoder_outputs).view(1,batch_size,-1)
-        output = torch.cat((embedded[0], attention_applied[0]), 1)
-        output = self.attention_combine(output).unsqueeze(0)
-        output = F.relu(output)
-        output, hidden = self.cell_layer(output, hidden)
-        output = self.out(output[0])
-        output = F.log_softmax(output, dim = 1)
-        
-        return output, hidden, attention_weights    
-
 def tensorFromWord(lang, word, max_length):
     index_list = []
     for i in range(len(word)):
@@ -304,6 +178,46 @@ def tensorFromPairs(input_lang, output_lang, pairs, max_length):
         target_variable = tensorFromWord(output_lang, pairs[i][1], max_length)
         res.append((input_variable, target_variable))
     return res
+
+def prepareTensors(configuration):
+
+        train_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_train.csv')
+        train_prepared_data= prepareData(configuration['source_lang'], configuration['target_lang'],train_path)    
+
+        validation_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_valid.csv')
+        val_prepared_data= prepareData(configuration['source_lang'], configuration['target_lang'],validation_path)
+
+        test_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_test.csv')
+        test_prepared_data= prepareData(configuration['source_lang'], configuration['target_lang'],test_path)
+
+        input_lang = train_prepared_data['input_lang']
+        output_lang = train_prepared_data['output_lang']
+
+        pairs = train_prepared_data['pairs']
+        val_pairs = val_prepared_data['pairs']
+        test_pairs = test_prepared_data['pairs']
+
+        max_input_length = train_prepared_data['max_input_length']
+        max_target_length = train_prepared_data['max_target_length']
+
+        max_input_length_val = val_prepared_data['max_input_length']
+        max_target_length_val = val_prepared_data['max_target_length']
+
+        max_input_length_test = test_prepared_data['max_input_length']
+        max_target_length_test = test_prepared_data['max_target_length']
+
+        max_list = [max_input_length, max_target_length, max_input_length_val, max_target_length_val, max_input_length_test, max_target_length_test]
+        max_len_all = max(max_list)
+
+        configuration['input_lang'] = input_lang
+        configuration['output_lang'] = output_lang
+        configuration['max_length_word'] = max_len_all + 1
+
+        pairs = tensorFromPairs(configuration['input_lang'], configuration['output_lang'], pairs , configuration['max_length_word'])
+        val_pairs = tensorFromPairs(configuration['input_lang'], configuration['output_lang'], val_pairs, configuration['max_length_word'])
+        test_pairs = tensorFromPairs(configuration['input_lang'], configuration['output_lang'], test_pairs, configuration['max_length_word'])
+
+        return pairs,val_pairs,test_pairs,configuration    
 
 def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, configuration, max_length, teacher_forcing_ratio = 0.5):
     
@@ -595,9 +509,11 @@ def cal_val_loss_with_attn(encoder, decoder, input_tensor, target_tensor, config
 
     return loss.item() / target_length
 
-def trainIters(encoder, decoder, train_loader, val_loader, test_loader, learning_rate, configuration, wandb_flag):
-
+def trainIters(encoder, decoder, train_loader, val_loader, test_loader,configuration, wandb_flag):
+    
+    learning_rate = configuration['learning_rate']
     max_length = configuration['max_length_word']
+    ep = configuration['epochs']
 
     encoder_optimizer, decoder_optimizer = None, None
 
@@ -609,8 +525,6 @@ def trainIters(encoder, decoder, train_loader, val_loader, test_loader, learning
         decoder_optimizer = optim.Adam(decoder.parameters(),lr=learning_rate)
 
     criterion = nn.NLLLoss()
-    
-    ep = configuration['epochs']
 
     for i in range(ep):
 
@@ -676,8 +590,7 @@ def trainIters(encoder, decoder, train_loader, val_loader, test_loader, learning
         print("test accuracy for the model : " ,evaluate_with_attn(encoder, decoder, test_loader, configuration, criterion, max_length+1))
     configuration['batch_size'] = temp
 
-
-def main(config = None):
+def sweepRun(config = None):
 
     with wandb.init(config = config, entity = entity_name_ap) as run:
         
@@ -698,56 +611,16 @@ def main(config = None):
                 'batch_size'          : config.batch_size,
                 'attention'           : attention_ap,
                 'epochs'              : config.epochs,
-                'optimizer'           : config.optimizer
-
-                # 'hidden_size'         : hidden_size_ap,
-                # 'source_lang'         : input_lang_ap,
-                # 'target_lang'         : target_lang_ap,
-                # 'cell_type'           : cell_type_ap,
-                # 'num_layers_encoder'  : num_layers_en_ap,
-                # 'num_layers_decoder'  : num_layers_dec_ap,
-                # 'drop_out'            : drop_out_ap, 
-                # 'embedding_size'      : embedding_size_ap,
-                # 'bi_directional'      : bidirectional_ap,
-                # 'batch_size'          : batch_size_ap,
-                # 'attention'           : attention_ap
+                'optimizer'           : config.optimizer,
+                'learning_rate'       : config.learning_rate
             }
-        
-        
-        train_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_train.csv')
-        validation_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_valid.csv')
-        test_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_test.csv')
 
-        train_prepared_data= prepareData(configuration['source_lang'], configuration['target_lang'],train_path)
+        pairs,val_pairs,test_pairs,configur = prepareTensors(configuration)
 
-        input_lang = train_prepared_data['input_lang']
-        output_lang = train_prepared_data['output_lang']
-        pairs = train_prepared_data['pairs']
-        max_input_length = train_prepared_data['max_input_length']
-        max_target_length = train_prepared_data['max_target_length']
-        
-        val_prepared_data= prepareData(configuration['source_lang'], configuration['target_lang'],validation_path)
+        configuration = configur
 
-        val_pairs = val_prepared_data['pairs']
-        max_input_length_val = val_prepared_data['max_input_length']
-        max_target_length_val = val_prepared_data['max_target_length']
-
-        test_prepared_data= prepareData(configuration['source_lang'], configuration['target_lang'],test_path)
-
-        test_pairs = test_prepared_data['pairs']
-        max_input_length_test = test_prepared_data['max_input_length']
-        max_target_length_test = test_prepared_data['max_target_length']
-
-        max_list = [max_input_length, max_target_length, max_input_length_val, max_target_length_val, max_input_length_test, max_target_length_test]
-        max_len_all = max(max_list)
-
-        max_len = max(max_input_length, max_target_length) + 2
-
-        configuration['input_lang'] = input_lang
-        configuration['output_lang'] = output_lang
-        configuration['max_length_word'] = max_len_all + 1
-
-        print(configuration['max_length_word'])
+        input_lang = configuration['input_lang']
+        output_lang = configuration['output_lang']
 
         encoder1 = EncoderRNN(input_lang.n_chars, configuration)
         decoder1 = DecoderRNN(configuration, output_lang.n_chars)
@@ -757,22 +630,18 @@ def main(config = None):
             decoder1=decoder1.cuda()
             attndecoder1 = attndecoder1.cuda()
 
-        pairs = tensorFromPairs(configuration['input_lang'], configuration['output_lang'], pairs , configuration['max_length_word'])
-        val_pairs = tensorFromPairs(configuration['input_lang'], configuration['output_lang'], val_pairs, configuration['max_length_word'])
-        test_pairs = tensorFromPairs(configuration['input_lang'], configuration['output_lang'], test_pairs, configuration['max_length_word'])
-
         train_loader = torch.utils.data.DataLoader(pairs, batch_size=configuration['batch_size'], shuffle=True)
         val_loader = torch.utils.data.DataLoader(val_pairs, batch_size=configuration['batch_size'], shuffle=True)
         test_loader = torch.utils.data.DataLoader(test_pairs, batch_size=1, shuffle=True)
 
+        wandb_flag = True
+
         if configuration['attention'] == False :
-            trainIters(encoder1, decoder1, train_loader, val_loader, test_loader, config.learning_rate, configuration,True)
+            trainIters(encoder1, decoder1, train_loader, val_loader, test_loader,configuration,wandb_flag)
         else : 
-            trainIters(encoder1, attndecoder1, train_loader, val_loader, test_loader, config.learning_rate, configuration,True)
+            trainIters(encoder1, attndecoder1, train_loader, val_loader, test_loader,configuration,wandb_flag)
 
-# main()
-
-# wandb.agent('1j0tkjlp', main, count  = 10)
+# wandb.agent('1j0tkjlp', sweepRun, count  = 10)
 
 def bestRun():
         configuration = {
@@ -793,42 +662,12 @@ def bestRun():
                 'epochs'              : epochs_ap
             }
         
-        print(configuration)
-        
-        train_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_train.csv')
-        validation_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_valid.csv')
-        test_path = os.path.join(dir, configuration['target_lang'], configuration['target_lang'] + '_test.csv')
+        pairs,val_pairs,test_pairs,configur = prepareTensors(configuration)
 
-        train_prepared_data= prepareData(configuration['source_lang'], configuration['target_lang'],train_path)
+        configuration = configur
 
-        input_lang = train_prepared_data['input_lang']
-        output_lang = train_prepared_data['output_lang']
-        pairs = train_prepared_data['pairs']
-        max_input_length = train_prepared_data['max_input_length']
-        max_target_length = train_prepared_data['max_target_length']
-        
-        val_prepared_data= prepareData(configuration['source_lang'], configuration['target_lang'],validation_path)
-
-        val_pairs = val_prepared_data['pairs']
-        max_input_length_val = val_prepared_data['max_input_length']
-        max_target_length_val = val_prepared_data['max_target_length']
-
-        test_prepared_data= prepareData(configuration['source_lang'], configuration['target_lang'],test_path)
-
-        test_pairs = test_prepared_data['pairs']
-        max_input_length_test = test_prepared_data['max_input_length']
-        max_target_length_test = test_prepared_data['max_target_length']
-
-        max_list = [max_input_length, max_target_length, max_input_length_val, max_target_length_val, max_input_length_test, max_target_length_test]
-        max_len_all = max(max_list)
-
-        max_len = max(max_input_length, max_target_length) + 2
-
-        configuration['input_lang'] = input_lang
-        configuration['output_lang'] = output_lang
-        configuration['max_length_word'] = max_len_all + 1
-
-        print(configuration['max_length_word'])
+        input_lang = configuration['input_lang']
+        output_lang = configuration['output_lang']
 
         encoder1 = EncoderRNN(input_lang.n_chars, configuration)
         decoder1 = DecoderRNN(configuration, output_lang.n_chars)
@@ -838,17 +677,15 @@ def bestRun():
             decoder1=decoder1.cuda()
             attndecoder1 = attndecoder1.cuda()
 
-        pairs = tensorFromPairs(configuration['input_lang'], configuration['output_lang'], pairs , configuration['max_length_word'])
-        val_pairs = tensorFromPairs(configuration['input_lang'], configuration['output_lang'], val_pairs, configuration['max_length_word'])
-        test_pairs = tensorFromPairs(configuration['input_lang'], configuration['output_lang'], test_pairs, configuration['max_length_word'])
-
         train_loader = torch.utils.data.DataLoader(pairs, batch_size=configuration['batch_size'], shuffle=True)
         val_loader = torch.utils.data.DataLoader(val_pairs, batch_size=configuration['batch_size'], shuffle=True)
         test_loader = torch.utils.data.DataLoader(test_pairs, batch_size=1, shuffle=True)
 
+        wandb_flag = False
+
         if configuration['attention'] == False :
-            trainIters(encoder1, decoder1, train_loader, val_loader, test_loader, configuration['learning_rate'], configuration,False)
+            trainIters(encoder1, decoder1, train_loader, val_loader, test_loader,configuration,wandb_flag)
         else : 
-            trainIters(encoder1, attndecoder1, train_loader, val_loader, test_loader, configuration['learning_rate'], configuration,False)
+            trainIters(encoder1, attndecoder1, train_loader, val_loader, test_loader, configuration,wandb_flag)
 
 bestRun()
