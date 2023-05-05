@@ -15,18 +15,18 @@ parser=argparse.ArgumentParser()
 
 parser.add_argument('-wp',      '--wandb_project',      help='project name',                                                    type=str,       default='CS6910_A3_')
 parser.add_argument('-we',      '--wandb_entity',       help='entity name',                                                     type=str,       default='cs22m064'  )
-parser.add_argument('-e',       '--epochs',             help='epochs',                          choices=[5,10],                 type=int,       default=2           )
+parser.add_argument('-e',       '--epochs',             help='epochs',                          choices=[5,10],                 type=int,       default=10          )
 parser.add_argument('-b',       '--batch_size',         help='batch sizes',                     choices=[32,64,128],            type=int,       default=64          )
 parser.add_argument('-o',       '--optimizer',          help='optimizer',                       choices=['adam','nadam'],       type=str,       default='adam'      )
 parser.add_argument('-lr',      '--learning_rate',      help='learning rates',                  choices=[1e-2,1e-3],            type=float,     default=1e-3        )
 parser.add_argument('-nle',     '--num_layers_en',      help='number of layers in encoder',     choices=[1,2,3],                type=int,       default=3           )
 parser.add_argument('-nld',     '--num_layers_dec',     help='number of layers in decoder',     choices=[1,2,3],                type=int,       default=1           )
-parser.add_argument('-sz',      '--hidden_size',        help='hidden layer size',               choices=[32,64,256,512],        type=int,       default=128         )
+parser.add_argument('-sz',      '--hidden_size',        help='hidden layer size',               choices=[32,64,256,512],        type=int,       default=512         )
 parser.add_argument('-il',      '--input_lang',         help='input language',                  choices=['eng'],                type=str,       default='eng'       )
 parser.add_argument('-tl',      '--target_lang',        help='target language',                 choices=['hin','tel'],          type=str,       default='hin'       )
 parser.add_argument('-ct',      '--cell_type',          help='cell type',                       choices=['LSTM','GRU','RNN'],   type=str,       default='LSTM'      )
 parser.add_argument('-do',      '--drop_out',           help='drop out',                        choices=[0.0,0.2,0.3],          type=float,     default=0.2         )
-parser.add_argument('-es',      '--embedding_size',     help='embedding size',                  choices=[16,32,64,256],         type=int,       default=128         )
+parser.add_argument('-es',      '--embedding_size',     help='embedding size',                  choices=[16,32,64,256],         type=int,       default=256         )
 parser.add_argument('-bd',      '--bidirectional',      help='bidirectional',                   choices=[True,False],           type=bool,      default=True        )
 parser.add_argument('-at',      '--attention',          help='attention',                       choices=[True,False],           type=bool,      default=False       )
 
@@ -292,8 +292,8 @@ def cal_val_loss(encoder, decoder, input_tensor, target_tensor, configuration, c
 
         loss = 0
             
-        for ei in range(input_length):
-            encoder_output, encoder_hidden = encoder(input_tensor[ei], batch_size, encoder_hidden)
+        for i in range(input_length):
+            encoder_output, encoder_hidden = encoder(input_tensor[i], batch_size, encoder_hidden)
 
         decoder_input = torch.LongTensor([SOS_token] * batch_size)
         decoder_input = decoder_input.cuda() if use_cuda else decoder_input
@@ -310,7 +310,7 @@ def cal_val_loss(encoder, decoder, input_tensor, target_tensor, configuration, c
 
     return loss.item() / target_length
 
-def evaluate(encoder, decoder, loader, configuration, criterion , max_length):
+def evaluate(encoder, decoder, loader, configuration,max_length):
 
     with torch.no_grad():
 
@@ -419,7 +419,7 @@ def train_with_attn(input_tensor, target_tensor, encoder, decoder, encoder_optim
 
     return loss.item() / target_length
 
-def evaluate_with_attn(encoder, decoder, loader, configuration, criterion , max_length):
+def evaluate_with_attn(encoder, decoder, loader, configuration, max_length):
 
     with torch.no_grad():
 
@@ -509,7 +509,18 @@ def cal_val_loss_with_attn(encoder, decoder, input_tensor, target_tensor, config
 
     return loss.item() / target_length
 
-def trainIters(encoder, decoder, train_loader, val_loader, test_loader,configuration, wandb_flag):
+def test_acc_best_model(configuration,test_loader,encoder,decoder):
+
+    max_length = configuration['max_length_word']
+    temp = configuration['batch_size']
+    configuration['batch_size'] = 1
+    if configuration['attention'] == False:
+        print("test accuracy for the model : " ,evaluate(encoder, decoder, test_loader, configuration, max_length))
+    else:
+        print("test accuracy for the model : " ,evaluate_with_attn(encoder, decoder, test_loader, configuration, max_length+1))
+    configuration['batch_size'] = temp
+
+def trainIters(encoder, decoder, train_loader, val_loader, configuration, wandb_flag):
     
     learning_rate = configuration['learning_rate']
     max_length = configuration['max_length_word']
@@ -561,14 +572,14 @@ def trainIters(encoder, decoder, train_loader, val_loader, test_loader,configura
         val_acc = 0
         
         # if configuration['attention'] == False:
-        #     train_acc = evaluate(encoder, decoder, train_loader, configuration, criterion, max_length)
+        #     train_acc = evaluate(encoder, decoder, train_loader, configuration, max_length)
         # else:
-        #     train_acc = evaluate_with_attn(encoder, decoder, train_loader, configuration, criterion, max_length+1)
+        #     train_acc = evaluate_with_attn(encoder, decoder, train_loader, configuration, max_length+1)
 
         if configuration['attention'] == False:
-            val_acc = evaluate(encoder, decoder, val_loader, configuration, criterion, max_length)
+            val_acc = evaluate(encoder, decoder, val_loader, configuration,max_length)
         else:
-            val_acc = evaluate_with_attn(encoder, decoder, val_loader, configuration, criterion, max_length+1)
+            val_acc = evaluate_with_attn(encoder, decoder, val_loader, configuration,max_length+1)
         
         # print("train accuracy : " ,train_acc, ' | ', end='')
         print('val loss :', val_loss_total, ' | ', end='')
@@ -581,14 +592,6 @@ def trainIters(encoder, decoder, train_loader, val_loader, test_loader,configura
                 # "train_accuracy"       : train_acc,
                 "validation_accuracy"  : val_acc
                 })
-
-    temp = configuration['batch_size']
-    configuration['batch_size'] = 1
-    if configuration['attention'] == False:
-        print("test accuracy for the model : " ,evaluate(encoder, decoder, test_loader, configuration, criterion, max_length))
-    else:
-        print("test accuracy for the model : " ,evaluate_with_attn(encoder, decoder, test_loader, configuration, criterion, max_length+1))
-    configuration['batch_size'] = temp
 
 def sweepRun(config = None):
 
@@ -632,14 +635,13 @@ def sweepRun(config = None):
 
         train_loader = torch.utils.data.DataLoader(pairs, batch_size=configuration['batch_size'], shuffle=True)
         val_loader = torch.utils.data.DataLoader(val_pairs, batch_size=configuration['batch_size'], shuffle=True)
-        test_loader = torch.utils.data.DataLoader(test_pairs, batch_size=1, shuffle=True)
 
         wandb_flag = True
 
         if configuration['attention'] == False :
-            trainIters(encoder1, decoder1, train_loader, val_loader, test_loader,configuration,wandb_flag)
+            trainIters(encoder1, decoder1, train_loader, val_loader, configuration,wandb_flag)
         else : 
-            trainIters(encoder1, attndecoder1, train_loader, val_loader, test_loader,configuration,wandb_flag)
+            trainIters(encoder1, attndecoder1, train_loader, val_loader, configuration,wandb_flag)
 
 # wandb.agent('1j0tkjlp', sweepRun, count  = 10)
 
@@ -684,8 +686,10 @@ def bestRun():
         wandb_flag = False
 
         if configuration['attention'] == False :
-            trainIters(encoder1, decoder1, train_loader, val_loader, test_loader,configuration,wandb_flag)
+            trainIters(encoder1, decoder1, train_loader, val_loader, configuration,wandb_flag)
         else : 
-            trainIters(encoder1, attndecoder1, train_loader, val_loader, test_loader, configuration,wandb_flag)
+            trainIters(encoder1, attndecoder1, train_loader, val_loader, configuration,wandb_flag)
+        
+        test_acc_best_model(configuration, test_loader, encoder1, decoder1)
 
 bestRun()
