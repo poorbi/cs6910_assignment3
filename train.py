@@ -21,12 +21,12 @@ parser.add_argument('-o',       '--optimizer',          help='optimizer',       
 parser.add_argument('-lr',      '--learning_rate',      help='learning rates',                  choices=[1e-2,1e-3],            type=float,     default=1e-3        )
 parser.add_argument('-nle',     '--num_layers_en',      help='number of layers in encoder',     choices=[1,2,3],                type=int,       default=3           )
 parser.add_argument('-nld',     '--num_layers_dec',     help='number of layers in decoder',     choices=[1,2,3],                type=int,       default=1           )
-parser.add_argument('-sz',      '--hidden_size',        help='hidden layer size',               choices=[32,64,256,512],        type=int,       default=512         )
+parser.add_argument('-sz',      '--hidden_size',        help='hidden layer size',               choices=[128,256,512],          type=int,       default=512         )
 parser.add_argument('-il',      '--input_lang',         help='input language',                  choices=['eng'],                type=str,       default='eng'       )
 parser.add_argument('-tl',      '--target_lang',        help='target language',                 choices=['hin','tel'],          type=str,       default='hin'       )
 parser.add_argument('-ct',      '--cell_type',          help='cell type',                       choices=['LSTM','GRU','RNN'],   type=str,       default='LSTM'      )
 parser.add_argument('-do',      '--drop_out',           help='drop out',                        choices=[0.0,0.2,0.3],          type=float,     default=0.2         )
-parser.add_argument('-es',      '--embedding_size',     help='embedding size',                  choices=[16,32,64,256],         type=int,       default=256         )
+parser.add_argument('-es',      '--embedding_size',     help='embedding size',                  choices=[64,128,256],           type=int,       default=256         )
 parser.add_argument('-bd',      '--bidirectional',      help='bidirectional',                   choices=[True,False],           type=bool,      default=True        )
 parser.add_argument('-at',      '--attention',          help='attention',                       choices=[True,False],           type=bool,      default=False       )
 
@@ -382,9 +382,9 @@ def train_with_attn(input_tensor, target_tensor, encoder, decoder, encoder_optim
 
     loss = 0
 
-    for ei in range(input_length):
-        encoder_output, encoder_hidden = encoder(input_tensor[ei], batch_size, encoder_hidden)
-        encoder_outputs[ei] = encoder_output[0]
+    for i in range(input_length):
+        encoder_output, encoder_hidden = encoder(input_tensor[i], batch_size, encoder_hidden)
+        encoder_outputs[i] = encoder_output[0]
 
     decoder_input = torch.LongTensor([SOS_token]*batch_size)
     decoder_input = decoder_input.cuda() if use_cuda else decoder_input
@@ -447,6 +447,8 @@ def evaluate_with_attn(encoder, decoder, loader, configuration, max_length):
             
             for i in range(input_length):
                 encoder_output, encoder_hidden = encoder(input_variable[i], batch_size, encoder_hidden)
+                encoder_outputs[i] = encoder_output[0]
+
 
             decoder_input = torch.LongTensor([SOS_token] * batch_size)
             decoder_input = decoder_input.cuda() if use_cuda else decoder_input
@@ -493,6 +495,7 @@ def cal_val_loss_with_attn(encoder, decoder, input_tensor, target_tensor, config
             
         for i in range(input_length):
             encoder_output, encoder_hidden = encoder(input_tensor[i], batch_size, encoder_hidden)
+            encoder_outputs[i] = encoder_output[0]
 
         decoder_input = torch.LongTensor([SOS_token] * batch_size)
         decoder_input = decoder_input.cuda() if use_cuda else decoder_input
@@ -594,6 +597,9 @@ def trainIters(encoder, decoder, train_loader, val_loader, configuration, wandb_
                 })
 
 def sweepRun(config = None):
+
+    # --> attention sweep id = '4w66az9v'
+    # --> non attention sweep id = '5yyscju4'
 
     with wandb.init(config = config, entity = entity_name_ap) as run:
         
