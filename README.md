@@ -24,7 +24,7 @@ As mentioned earlier, there are two python code files named train.py and model.p
 
 1. Put train.py and model.py file in the same folder.<br>
 
-2. Please make sure that the unzipped folder of the aksharantar_sampled dataset is present in the same directory as these python file.<br>
+2. Please make sure that the unzipped folder of the aksharantar_sampled dataset is present in the same directory as these python files.<br>
 
 3. First you will need to run the model.py file as shown below in the terminal<br>
 ```sh
@@ -41,12 +41,27 @@ python model.py
     ```sh
     python train.py --batch_size xx --learning_rate xx --hidden_size xx --embedding_size xx --bidirectional xx --attention xx
     ```
-    Replace `xxx` in above with the appropriate parameter you want to train the model with<br>
+    Replace `xx` in above with the appropriate parameter you want to train the model with<br>
       For example: 
 
       ```sh
       python train.py --batch_size 64 --learning_rate 1e-3 --hidden_size 256 --embedding_size 256 --bidirectional True --attention False
       ```
+      
+### Running the train.py file from the terminal for hyperparameter sweeps
+1. Put train.py and model.py file in the same folder.<br>
+
+2. Please make sure that the unzipped folder of the aksharantar_sampled dataset is present in the same directory as these python files.<br>
+
+3. First you will need to run the model.py file as shown below in the terminal<br>
+```sh
+python model.py
+```
+
+4. You need to uncomment line numbers 162 and 1154 from train.py for running sweeps. Sweep project and entity can be changed using command line arguments as:
+```sh
+python train.py --wandb_project your_proj_name --wandb_entity your_wandb_entity
+```
 
 #### Description of various command line arguments
 
