@@ -48,21 +48,28 @@ python model.py
       python train.py --batch_size 64 --learning_rate 1e-3 --hidden_size 256 --embedding_size 256 --bidirectional True --attention False
       ```
 
-### Description of various command line arguments
+#### Description of various command line arguments
 
-1.  -wp/--wandb_project   : custom project name with default set to 'CS6910_A3_' (string type)
-2.  -we/--wandb_entity    : custom entity name with default set to 'cs22m064' (string type)
-3.  -e/--epochs           : custom number of epochs with available choices 5 or 10 and default set to 10 (integer type)
-4.  -b/--batch_size       : custom batch size with available choices 32, 64 or 128 and default set to 128 (integer type)
-5.  -o/--optimizer        : custom optimizer with available choices adam or nadam and default set to nadam (string type)
-6.  -lr/--learning_rate   : custom learning rate with available choices 1e-2 or 1e-3 and default set to 1e-3 (integer type)
-7.  -nle/--num_layers_en  : custom number layers encoder with available choices 1, 2 or 3 and default set to 3 (integer type)
-8.  -nld/--num_layers_dec : custom number layers decoder with available choices 1, 2 or 3 and default set to 2 (integer type)
-9.  -sz/--hidden_size     : custom hidden size with available choices 128, 256 or 512 and default set to 512 (integer type)
-10. -il/--input_lang      : custom input language with available choices eng and default set to eng (string type)
-11. -tl/--target_lang     : custom target language with available choices hin or tel and default set to hin (string type)
-12. -ct/--cell_type       : custom cell type with available choices LSTM, GRU or RNN and default set to LSTM (string type)
-13. -do/--drop_out        : custom dropout with available choices 0.0, 0.2 or 0.3 and default set to 0.0 (float type)
-14. -es/--embedding_size  : custom embedding size with available choices 64,128 or 256 and default set to 256 (integer type)
-15. -bd/--bidirectional   : custom bidirectional setting with available True or False and default set to True (boolean type)
-16. -at/--attention       : custom attention setting with available choices True or False and default set to False (boolean type)
+1.  `-wp/--wandb_project`   : custom project name with default set to 'CS6910_A3_' (string type)
+2.  `-we/--wandb_entity`    : custom entity name with default set to 'cs22m064' (string type)
+3.  `-e/--epochs`           : custom number of epochs with available choices 5 or 10 and default set to 10 (integer type)
+4.  `-b/--batch_size`       : custom batch size with available choices 32, 64 or 128 and default set to 128 (integer type)
+5.  `-o/--optimizer`        : custom optimizer with available choices adam or nadam and default set to nadam (string type)
+6.  `-lr/--learning_rate`   : custom learning rate with available choices 1e-2 or 1e-3 and default set to 1e-3 (integer type)
+7.  `-nle/--num_layers_en`  : custom number layers encoder with available choices 1, 2 or 3 and default set to 3 (integer type)
+8.  `-nld/--num_layers_dec` : custom number layers decoder with available choices 1, 2 or 3 and default set to 2 (integer type)
+9.  `-sz/--hidden_size`     : custom hidden size with available choices 128, 256 or 512 and default set to 512 (integer type)
+10. `-il/--input_lang`      : custom input language with available choices eng and default set to eng (string type)
+11. `-tl/--target_lang`     : custom target language with available choices hin or tel and default set to hin (string type)
+12. `-ct/--cell_type`       : custom cell type with available choices LSTM, GRU or RNN and default set to LSTM (string type)
+13. `-do/--drop_out`        : custom dropout with available choices 0.0, 0.2 or 0.3 and default set to 0.0 (float type)
+14. `-es/--embedding_size`  : custom embedding size with available choices 64,128 or 256 and default set to 256 (integer type)
+15. `-bd/--bidirectional`   : custom bidirectional setting with available True or False and default set to True (boolean type)
+16. `-at/--attention`       : custom attention setting with available choices True or False and default set to False (boolean type)
+
+### Running the confusion_matrix.py file from the terminal
+In order to run this file make sure the predictions_vanilla.csv and predictions_attention.csv are in the same directory as this one.<br>
+Now the file can be simply run by writing this in terminal<br>
+```sh
+python confusion_matrix.py
+```
