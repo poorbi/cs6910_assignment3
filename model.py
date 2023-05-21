@@ -2,6 +2,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+'''
+The classes in the model are inspired from the model classes present in the blog : https://pytorch.org/tutorials/intermediate/seq2seq_translation_tutorial.html suggested by you
+In the blog everything has been done in context of translating sentences from the one language to other without using batches.
+However I have understood the mechanism and applied it over for transliteration objective in the form of batches.
+Some part of the code might look similar as I have applied a similar encoder, decoder and attention decoder architechture for my purpose.
+'''
+
 use_cuda = torch.cuda.is_available()
 
 class EncoderRNN(nn.Module):
