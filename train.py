@@ -4,6 +4,7 @@ validation data accuracy for each epoch and test accuracy for the best set of hy
 '''
 import os
 import wandb
+import csv
 import torch
 import random
 import argparse
@@ -47,21 +48,21 @@ Note : Default values have been set to the best hyperparameter configurations as
 
 parser=argparse.ArgumentParser()
 
-parser.add_argument('-wp',      '--wandb_project',      help='project name',                                                    type=str,       default='CS6910_A3_')
+parser.add_argument('-wp',      '--wandb_project',      help='project name',                                                    type=str,       default='A3')
 parser.add_argument('-we',      '--wandb_entity',       help='entity name',                                                     type=str,       default='cs22m064'  )
-parser.add_argument('-e',       '--epochs',             help='epochs',                          choices=[5,10],                 type=int,       default=10          )
-parser.add_argument('-b',       '--batch_size',         help='batch sizes',                     choices=[32,64,128],            type=int,       default=64         )
+parser.add_argument('-e',       '--epochs',             help='epochs',                          choices=[5,10],                 type=int,       default=10           )
+parser.add_argument('-b',       '--batch_size',         help='batch sizes',                     choices=[32,64,128],            type=int,       default=128         )
 parser.add_argument('-o',       '--optimizer',          help='optimizer',                       choices=['adam','nadam'],       type=str,       default='nadam'     )
 parser.add_argument('-lr',      '--learning_rate',      help='learning rates',                  choices=[1e-2,1e-3],            type=float,     default=1e-3        )
 parser.add_argument('-nle',     '--num_layers_en',      help='number of layers in encoder',     choices=[1,2,3],                type=int,       default=2           )
-parser.add_argument('-nld',     '--num_layers_dec',     help='number of layers in decoder',     choices=[1,2,3],                type=int,       default=1           )
+parser.add_argument('-nld',     '--num_layers_dec',     help='number of layers in decoder',     choices=[1,2,3],                type=int,       default=3           )
 parser.add_argument('-sz',      '--hidden_size',        help='hidden layer size',               choices=[128,256,512],          type=int,       default=512         )
 parser.add_argument('-il',      '--input_lang',         help='input language',                  choices=['eng'],                type=str,       default='eng'       )
 parser.add_argument('-tl',      '--target_lang',        help='target language',                 choices=['hin','tel'],          type=str,       default='hin'       )
 parser.add_argument('-ct',      '--cell_type',          help='cell type',                       choices=['LSTM','GRU','RNN'],   type=str,       default='LSTM'      )
 parser.add_argument('-do',      '--drop_out',           help='drop out',                        choices=[0.0,0.2,0.3],          type=float,     default=0.2         )
 parser.add_argument('-es',      '--embedding_size',     help='embedding size',                  choices=[64,128,256],           type=int,       default=128         )
-parser.add_argument('-bd',      '--bidirectional',      help='bidirectional',                   choices=[True,False],           type=bool,      default=True        )
+parser.add_argument('-bd',      '--bidirectional',      help='bidirectional',                   choices=[True,False],           type=bool,      default=False       )
 parser.add_argument('-at',      '--attention',          help='attention',                       choices=[True,False],           type=bool,      default=True        )
 
 args=parser.parse_args()
@@ -198,6 +199,13 @@ The prepareData function also makes use of the prepareVocabulary class objects t
 The prepareData function also finds maximum length words in both input and target language words and returns them which will be helpful later on
 '''
 
+'''
+INPUTS TO THE FUNCTION:
+    1.lang1 : input language
+    2.lang2 : target language
+    3. dir : path of csv file
+'''
+
 def prepareData(lang1, lang2, dir):
 
     # Read a CSV using the directory passed into the function
@@ -243,6 +251,12 @@ PREPARE TENSORS SECTION
 The functions under this section help in creating tensors that are going to be actually passed into the model created 
 '''
 
+'''
+INPUTS TO THE FUNCTION:
+    1. lang : input/output vocabulary is passed
+    2. word: word whose tensor is to be formed 
+    3. max_length : maximum out of length of all words from input and target words
+'''
 # This function will be called iteratively for each word in pairs of data and create a tensor from them.
 def tensorFromWord(lang, word, max_length):
     index_list = []
@@ -268,6 +282,13 @@ def tensorFromWord(lang, word, max_length):
     # Shift the tensor to cuda if it is available
     return result.cuda() if use_cuda else result
 
+'''
+INPUTS TO THE FUNCTION:
+    1. input_lang : input vocabulary
+    2. output_lang : output vocabulary
+    3. pairs : batch of pairs of input and target words 
+    4. max_length : maximum out of length of all words from input and target words
+'''
 # This function will be called for pairs in data and create a tensor from them.
 def tensorFromPairs(input_lang, output_lang, pairs, max_length):
     res = []
@@ -279,6 +300,10 @@ def tensorFromPairs(input_lang, output_lang, pairs, max_length):
         res.append((input_variable, target_variable))
     return res
 
+'''
+INPUTS TO THE FUNCTION:
+    1. configuration : the parameters defined either from sweep or best set
+'''
 # This function converts the train, validation and test data into tensors so that model can be applied to them
 # In case of training the train tensors will be useful while in case of evaluation after each epoch validation tensors
 # In the end after hyperparameter tuning when we get the best model we use the test tensors to get the test accuracy
@@ -337,8 +362,21 @@ def prepareTensors(configuration):
 TRAINING and EVALUATION for model with NO ATTENTION mechanism SECTION
 
 The functions under this section help in training and evaluation of train data, evaluation of validation data without attention mechanism.
-''' 
+The training and evaluation functions are inspired from the blog : https://pytorch.org/tutorials/intermediate/seq2seq_translation_tutorial.html suggested by you
 
+''' 
+'''
+INPUTS TO THE FUNCTION:
+    1. input_tensor : input tensors batch
+    2. target_tensor : target tensors batch
+    3. encoder : encoder class object
+    4. decoder : decoder class object
+    5. encoder_optimizer:
+    6. decoder_optimizer:
+    7. criterion : loss function
+    8. configuration : the parameters defined either from sweep or best set
+    9. max_length : maximum out of length of all words from input and target words 
+'''
 def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, configuration, max_length, teacher_forcing_ratio = 0.5):
     
     # Fetch batch size and number of layers from configuration dictionary
@@ -411,16 +449,25 @@ def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, deco
 
     # Return loss for the current train batch
     return loss.item() / target_length
-  
-
-
-def evaluate(encoder, decoder, loader, configuration,max_length):
+'''
+INPUTS TO THE FUNCTION:
+    1. loader : validation or test set batches
+    2. encoder : encoder class object
+    3. decoder : decoder class object
+    4. configuration : the parameters defined either from sweep or best set
+    5. max_length : maximum out of length of all words from input and target words 
+    6. test : if it is true then outputs will be logged into csv
+'''
+def evaluate(encoder, decoder, loader, configuration,max_length,test=False):
 
     # disabled gradient calculation for inference, helps reduce memory consumption for computations
     with torch.no_grad():
 
         total = 0
         correct = 0
+        actual_X = []
+        actual_Y = []
+        predicted_Y = []
         
         # Calculating Accuracy for all batches in validation loader together
         for batch_x, batch_y in loader:
@@ -443,6 +490,12 @@ def evaluate(encoder, decoder, loader, configuration,max_length):
 
             # Initializing output as a tensor of size target_length X batch_size
             output = Variable(torch.LongTensor(target_length, batch_size))
+
+            if test:
+                x = None
+                for i in range(batch_x.size()[0]):
+                    x = [configuration['input_lang'].index2char[letter.item()] for letter in batch_x[i] if letter not in [SOW_token, EOW_token, PAD_token, UNK_token]]
+                    actual_X.append(x)
             
             # Passing ith character of every word from the input batch into the encoder iteratively  
             for i in range(input_length):
@@ -477,15 +530,29 @@ def evaluate(encoder, decoder, loader, configuration,max_length):
                 sent = [configuration['output_lang'].index2char[letter.item()] for letter in output[i] if letter not in [SOW_token, EOW_token, PAD_token, UNK_token]]
                 #y is ith target word of the batch 
                 y = [configuration['output_lang'].index2char[letter.item()] for letter in batch_y[i] if letter not in [SOW_token, EOW_token, PAD_token, UNK_token]]
+                if test:
+                    actual_Y.append(y)
+                    predicted_Y.append(sent)
                 # If they match correct count increases by 1
                 if sent == y:
                     correct += 1
                 # Counts total number of such pairs of target and predicted words
                 total += 1
+        if test:
+            writeToCSV(actual_X,actual_Y,predicted_Y)
     
     # Accuracy will be correct/total and multiply by 100 to get in percentage
     return (correct/total)*100
-
+'''
+INPUTS TO THE FUNCTION:
+    1. input_tensor : input tensors batch
+    2. target_tensor : target tensors batch
+    3. encoder : encoder class object
+    4. decoder : decoder class object
+    5. criterion : loss function
+    6. configuration : the parameters defined either from sweep or best set
+    7. max_length : maximum out of length of all words from input and target words 
+'''
 def cal_val_loss(encoder, decoder, input_tensor, target_tensor, configuration, criterion , max_length):
 
     # disabled gradient calculation for inference, helps reduce memory consumption for computations
@@ -543,8 +610,21 @@ def cal_val_loss(encoder, decoder, input_tensor, target_tensor, configuration, c
 TRAINING and EVALUATION for model with ATTENTION mechanism SECTION
 
 The functions under this section help in training and evaluation of train data, evaluation of validation data using attention mechanism.
-''' 
+The training and evaluation functions are inspired from the blog : https://pytorch.org/tutorials/intermediate/seq2seq_translation_tutorial.html suggested by you
 
+''' 
+'''
+INPUTS TO THE FUNCTION:
+    1. input_tensor : input tensors batch
+    2. target_tensor : target tensors batch
+    3. encoder : encoder class object
+    4. decoder : decoder class object
+    5. encoder_optimizer:
+    6. decoder_optimizer:
+    7. criterion : loss function
+    8. configuration : the parameters defined either from sweep or best set
+    9. max_length : maximum out of length of all words from input and target words 
+'''
 def train_with_attn(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion, configuration, max_length, teacher_forcing_ratio = 0.5):
     
     # Fetch batch size and number of layers from configuration dictionary
@@ -643,13 +723,25 @@ def train_with_attn(input_tensor, target_tensor, encoder, decoder, encoder_optim
     # Return loss for the current train batch
     return loss.item() / target_length
 
-def evaluate_with_attn(encoder, decoder, loader, configuration, max_length):
+'''
+INPUTS TO THE FUNCTION:
+    1. loader : validation or test set batches
+    2. encoder : encoder class object
+    3. decoder : decoder class object
+    4. configuration : the parameters defined either from sweep or best set
+    5. max_length : maximum out of length of all words from input and target words 
+    6. test : if it is true then outputs will be logged into csv
+'''
+def evaluate_with_attn(encoder, decoder, loader, configuration, max_length, test=False):
 
     # disabled gradient calculation for inference, helps reduce memory consumption for computations
     with torch.no_grad():
 
         total = 0
         correct = 0
+        actual_X = []
+        actual_Y = []
+        predicted_Y = []
         
         # Calculating Accuracy for all batches in validation loader together
         for batch_x, batch_y in loader:
@@ -684,6 +776,12 @@ def evaluate_with_attn(encoder, decoder, loader, configuration, max_length):
                 encoder_outputs = Variable(torch.zeros(max_length, batch_size, encoder.hidden_size))
                 # Shift encoder outputs to cuda if available
                 encoder_outputs = encoder_outputs.cuda() if use_cuda else encoder_outputs
+            
+            if test:
+                x = None
+                for i in range(batch_x.size()[0]):
+                    x = [configuration['input_lang'].index2char[letter.item()] for letter in batch_x[i] if letter not in [SOW_token, EOW_token, PAD_token, UNK_token]]
+                    actual_X.append(x)
 
             # Passing ith character of every word from the input batch into the encoder iteratively  
             for i in range(input_length):
@@ -724,16 +822,29 @@ def evaluate_with_attn(encoder, decoder, loader, configuration, max_length):
                 sent = [configuration['output_lang'].index2char[letter.item()] for letter in output[i] if letter not in [SOW_token, EOW_token, PAD_token, UNK_token]]
                 #y is ith target word of the batch 
                 y = [configuration['output_lang'].index2char[letter.item()] for letter in batch_y[i] if letter not in [SOW_token, EOW_token, PAD_token, UNK_token]]
+                if test:
+                    actual_Y.append(y)
+                    predicted_Y.append(sent)
                 # If they match correct count increases by 1
                 if sent == y:
                     correct += 1
                 # Counts total number of such pairs of target and predicted words
                 total += 1
-
+        if test:
+            writeToCSV(actual_X,actual_Y,predicted_Y)
     # Accuracy will be correct/total and multiply by 100 to get in percentage
     return (correct/total)*100
 
-
+'''
+INPUTS TO THE FUNCTION:
+    1. input_tensor : input tensors batch
+    2. target_tensor : target tensors batch
+    3. encoder : encoder class object
+    4. decoder : decoder class object
+    5. criterion : loss function
+    6. configuration : the parameters defined either from sweep or best set
+    7. max_length : maximum out of length of all words from input and target words 
+'''
 def cal_val_loss_with_attn(encoder, decoder, input_tensor, target_tensor, configuration, criterion , max_length):
 
     # disabled gradient calculation for inference, helps reduce memory consumption for computations
@@ -807,6 +918,14 @@ HEATMAPS SECTION
 The functions under this section help in creating and plotting heatmaps.
 ''' 
 
+'''
+INPUTS TO THE FUNCTION:
+    1. loader : test set batches
+    2. encoder : encoder class object
+    3. decoder : decoder class object
+    4. configuration : the parameters defined either from sweep or best set
+    5. max_length : maximum out of length of all words from input and target words 
+'''
 def store_heatmaps(encoder, decoder, loader, configuration, max_length):
 
     temp = configuration['batch_size']
@@ -907,14 +1026,18 @@ def store_heatmaps(encoder, decoder, loader, configuration, max_length):
                 sent = [configuration['output_lang'].index2char[letter.item()] for letter in output[i] if letter not in [SOW_token, EOW_token, PAD_token, UNK_token]]
                 # Appending the predicted words for the input word
                 predictions.append(sent)
-                #y is ith target word of the batch 
-                y = [configuration['output_lang'].index2char[letter.item()] for letter in batch_y[i] if letter not in [SOW_token, EOW_token, PAD_token, UNK_token]]
 
             if count == 12 : 
                 configuration['batch_size'] = temp
                 # Returns input words, predicted words, attentions respectively
                 return predictions,attentions,xs
-
+'''
+INPUTS TO THE FUNCTION:
+    1. test_loader : test set batches
+    2. encoder : encoder class object
+    3. decoder : decoder class object
+    4. configuration : the parameters defined either from sweep or best set
+'''
 def plot_heatmap(configuration, test_loader, encoder, decoder):
     max_length = configuration['max_length_word']
     # input words, predicted words, attentions respectively fetched from store_heatmaps
@@ -961,7 +1084,7 @@ def plot_heatmap(configuration, test_loader, encoder, decoder):
     # Plot on wandb
     run = wandb.init(project=project_name_ap,entity = entity_name_ap)
     plt.show()
-    wandb.log({'heatmap':fig})
+    wandb.log({'heatmaps':fig})
     wandb.finish()
 
 # -------------------------------------------------------------------------------------------------------------------------------------
@@ -971,7 +1094,13 @@ TEST ACCURACY FOR BEST MODEL SECTION
 
 The functions under this section help in printing test accuracy for best model.
 ''' 
-
+'''
+INPUTS TO THE FUNCTION:
+    1. test_loader : test set batches
+    2. encoder : encoder class object
+    3. decoder : decoder class object
+    4. configuration : the parameters defined either from sweep or best set
+'''
 def test_acc_best_model(configuration,test_loader,encoder,decoder):
 
     max_length = configuration['max_length_word']
@@ -980,10 +1109,10 @@ def test_acc_best_model(configuration,test_loader,encoder,decoder):
     configuration['batch_size'] = 1
     if not configuration['attention']:
         # In case of non-attention calling evaluate()
-        print("test accuracy for the model : " ,evaluate(encoder, decoder, test_loader, configuration, max_length))
+        print("test accuracy for the model : " ,evaluate(encoder, decoder, test_loader, configuration, max_length,True))
     else:
         # Else calling evaluate_with_attn()
-        print("test accuracy for the model : " ,evaluate_with_attn(encoder, decoder, test_loader, configuration, max_length+1))
+        print("test accuracy for the model : " ,evaluate_with_attn(encoder, decoder, test_loader, configuration, max_length+1,True))
     # Returning batch size back to previous
     configuration['batch_size'] = temp
 
@@ -994,8 +1123,16 @@ TRAINING OF THE MODEL SECTION
 
 The functions under this section help in training the model.
 ''' 
-
-def trainIters(encoder, decoder, train_loader, val_loader, configuration, wandb_flag):
+'''
+INPUTS TO THE FUNCTION:
+    1. train_loader : train set batches
+    2. val_loader : validation set batches
+    3. encoder : encoder class object
+    4. decoder : decoder class object
+    5. configuration : the parameters defined either from sweep or best set
+    6. wand_flag : if code runs in sweep mode it is true else false
+'''
+def trainModel(encoder, decoder, train_loader, val_loader, configuration, wandb_flag):
     
     # Using cross entropy loss
     criterion = nn.CrossEntropyLoss()
@@ -1086,6 +1223,46 @@ def trainIters(encoder, decoder, train_loader, val_loader, configuration, wandb_
 # -------------------------------------------------------------------------------------------------------------------------------------
 
 '''
+WRITE TO CSV SECTION
+
+The functions under this section help in writing the test predictions to csv.
+'''
+'''
+INPUTS TO THE FUNCTION:
+    1. actual_input_list : test set input word list
+    2. actual_targtet_list : test set target word list
+    3. predicted_target_list : test set predictions
+'''
+def writeToCSV(actual_input_list,actual_targtet_list,predicted_target_list):
+
+    rows = []
+    for i in range(len(predicted_target_list)):
+        str_X = ''
+        str_X = str_X.join(actual_input_list[i])
+        str_Y = ''
+        str_Y = str_Y.join(actual_targtet_list[i])
+        str_pred_Y = ''
+        str_pred_Y = str_pred_Y.join(predicted_target_list[i])
+        rows.append([str_X,str_Y,str_pred_Y])
+    
+    filename = "predictions_attention.csv"
+    fields = ["Actual_X","Actual_Y","Predicted_Y"]
+
+    # writing to csv file 
+    with open(filename, 'w') as csvfile: 
+        # creating a csv writer object 
+        csvwriter = csv.writer(csvfile) 
+            
+        # writing the fields 
+        csvwriter.writerow(fields) 
+            
+        # writing the data rows 
+        csvwriter.writerows(rows)
+
+
+# -------------------------------------------------------------------------------------------------------------------------------------
+
+'''
 SWEEP RUN AND BEST RUN SECTION
 
 The functions under this section help in running sweeps.
@@ -1146,12 +1323,12 @@ def sweepRun(config = None):
 
         # Calling trainIters wrt too attention
         if not configuration['attention']:
-            trainIters(encoder, decoder, train_loader, val_loader, configuration,wandb_flag)
+            trainModel(encoder, decoder, train_loader, val_loader, configuration,wandb_flag)
         else : 
-            trainIters(encoder, attndecoder, train_loader, val_loader, configuration,wandb_flag)
+            trainModel(encoder, attndecoder, train_loader, val_loader, configuration,wandb_flag)
 
 # This line below needs to be uncommented in order to run sweeps
-# wandb.agent(sweep_id, sweepRun, count  = 2)
+# wandb.agent(sweep_id, sweepRun, count  = 1)
 
 def bestRun():
         # Best parameters are set as default in arparse parameters
@@ -1201,13 +1378,13 @@ def bestRun():
 
         # Calling trainIters wrt too attention
         if not configuration['attention'] :
-            trainIters(encoder1, decoder1, train_loader, val_loader, configuration,wandb_flag)
+            trainModel(encoder1, decoder1, train_loader, val_loader, configuration,wandb_flag)
             # Here we also print the test accuracy for best model
             test_acc_best_model(configuration, test_loader, encoder1, decoder1)
         else : 
-            trainIters(encoder1, attndecoder1, train_loader, val_loader, configuration,wandb_flag)
+            trainModel(encoder1, attndecoder1, train_loader, val_loader, configuration,wandb_flag)
             # Plotting heatmaps for best model with attention
-            plot_heatmap(configuration, test_loader, encoder1, attndecoder1)
+            # plot_heatmap(configuration, test_loader, encoder1, attndecoder1)
             # Here we also print the test accuracy for best model
             test_acc_best_model(configuration, test_loader, encoder1, attndecoder1)
 
